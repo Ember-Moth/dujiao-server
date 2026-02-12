@@ -9,3 +9,5 @@ uploads
 .DS_Store
 */node_modules/
 */dist/
+# Added by goreleaser init:
+dist/
