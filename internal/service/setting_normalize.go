@@ -82,14 +82,12 @@ func normalizeSiteContact(raw interface{}) map[string]interface{} {
 
 func normalizeSiteBrand(raw interface{}) map[string]interface{} {
 	result := map[string]interface{}{
-		"logo_text": "",
 		"site_name": "",
 	}
 	brandMap, ok := raw.(map[string]interface{})
 	if !ok {
 		return result
 	}
-	result["logo_text"] = normalizeSettingText(brandMap["logo_text"])
 	result["site_name"] = normalizeSettingText(brandMap["site_name"])
 	return result
 }

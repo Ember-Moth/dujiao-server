@@ -36,7 +36,6 @@ func TestUpdateSiteSettingNormalized(t *testing.T) {
 
 	result, err := svc.Update(constants.SettingKeySiteConfig, map[string]interface{}{
 		"brand": map[string]interface{}{
-			"logo_text": "  D&N  ",
 			"site_name": 123,
 		},
 		"contact": map[string]interface{}{
@@ -99,9 +98,6 @@ func TestUpdateSiteSettingNormalized(t *testing.T) {
 	brand, ok := result["brand"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("invalid brand payload type: %T", result["brand"])
-	}
-	if brand["logo_text"] != "D&N" {
-		t.Fatalf("unexpected brand.logo_text: %v", brand["logo_text"])
 	}
 	if brand["site_name"] != "" {
 		t.Fatalf("unexpected brand.site_name: %v", brand["site_name"])
@@ -226,7 +222,7 @@ func TestUpdateSiteSettingNormalizedDefaultAbout(t *testing.T) {
 	if !ok {
 		t.Fatalf("invalid brand payload type: %T", result["brand"])
 	}
-	if brand["logo_text"] != "" || brand["site_name"] != "" {
+	if brand["site_name"] != "" {
 		t.Fatalf("unexpected default brand payload: %+v", brand)
 	}
 
