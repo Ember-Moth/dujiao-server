@@ -1,0 +1,263 @@
+package repository
+
+import (
+	"errors"
+	"strings"
+
+	"github.com/dujiao-next/internal/models"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+// WalletRepository 钱包数据访问接口
+type WalletRepository interface {
+	GetAccountByUserID(userID uint) (*models.WalletAccount, error)
+	GetAccountByUserIDForUpdate(userID uint) (*models.WalletAccount, error)
+	GetAccountsByUserIDs(userIDs []uint) ([]models.WalletAccount, error)
+	CreateAccount(account *models.WalletAccount) error
+	UpdateAccount(account *models.WalletAccount) error
+	ListAccounts(filter WalletAccountListFilter) ([]models.WalletAccount, int64, error)
+	CreateTransaction(txn *models.WalletTransaction) error
+	GetTransactionByReference(reference string) (*models.WalletTransaction, error)
+	ListTransactions(filter WalletTransactionListFilter) ([]models.WalletTransaction, int64, error)
+	CreateRechargeOrder(order *models.WalletRechargeOrder) error
+	UpdateRechargeOrder(order *models.WalletRechargeOrder) error
+	GetRechargeOrderByRechargeNo(userID uint, rechargeNo string) (*models.WalletRechargeOrder, error)
+	GetRechargeOrderByPaymentID(paymentID uint) (*models.WalletRechargeOrder, error)
+	GetRechargeOrderByPaymentIDAndUser(paymentID uint, userID uint) (*models.WalletRechargeOrder, error)
+	GetRechargeOrderByPaymentIDForUpdate(paymentID uint) (*models.WalletRechargeOrder, error)
+	WithTx(tx *gorm.DB) *GormWalletRepository
+}
+
+// GormWalletRepository GORM 钱包仓储实现
+type GormWalletRepository struct {
+	db *gorm.DB
+}
+
+// NewWalletRepository 创建钱包仓储
+func NewWalletRepository(db *gorm.DB) *GormWalletRepository {
+	return &GormWalletRepository{db: db}
+}
+
+// WithTx 绑定事务
+func (r *GormWalletRepository) WithTx(tx *gorm.DB) *GormWalletRepository {
+	if tx == nil {
+		return r
+	}
+	return &GormWalletRepository{db: tx}
+}
+
+// GetAccountByUserID 按用户ID获取钱包账户
+func (r *GormWalletRepository) GetAccountByUserID(userID uint) (*models.WalletAccount, error) {
+	if userID == 0 {
+		return nil, nil
+	}
+	var account models.WalletAccount
+	if err := r.db.Where("user_id = ?", userID).First(&account).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &account, nil
+}
+
+// GetAccountByUserIDForUpdate 按用户ID加锁获取钱包账户
+func (r *GormWalletRepository) GetAccountByUserIDForUpdate(userID uint) (*models.WalletAccount, error) {
+	if userID == 0 {
+		return nil, nil
+	}
+	var account models.WalletAccount
+	if err := r.db.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("user_id = ?", userID).
+		First(&account).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &account, nil
+}
+
+// GetAccountsByUserIDs 批量获取钱包账户
+func (r *GormWalletRepository) GetAccountsByUserIDs(userIDs []uint) ([]models.WalletAccount, error) {
+	if len(userIDs) == 0 {
+		return []models.WalletAccount{}, nil
+	}
+	var accounts []models.WalletAccount
+	if err := r.db.Where("user_id IN ?", userIDs).Find(&accounts).Error; err != nil {
+		return nil, err
+	}
+	return accounts, nil
+}
+
+// CreateAccount 创建钱包账户
+func (r *GormWalletRepository) CreateAccount(account *models.WalletAccount) error {
+	return r.db.Create(account).Error
+}
+
+// UpdateAccount 更新钱包账户
+func (r *GormWalletRepository) UpdateAccount(account *models.WalletAccount) error {
+	return r.db.Save(account).Error
+}
+
+// ListAccounts 分页查询钱包账户
+func (r *GormWalletRepository) ListAccounts(filter WalletAccountListFilter) ([]models.WalletAccount, int64, error) {
+	query := r.db.Model(&models.WalletAccount{})
+	if filter.UserID != 0 {
+		query = query.Where("user_id = ?", filter.UserID)
+	}
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if filter.PageSize > 0 {
+		offset := (filter.Page - 1) * filter.PageSize
+		query = query.Limit(filter.PageSize).Offset(offset)
+	}
+
+	var accounts []models.WalletAccount
+	if err := query.Order("id desc").Find(&accounts).Error; err != nil {
+		return nil, 0, err
+	}
+	return accounts, total, nil
+}
+
+// CreateTransaction 创建钱包流水
+func (r *GormWalletRepository) CreateTransaction(txn *models.WalletTransaction) error {
+	return r.db.Create(txn).Error
+}
+
+// GetTransactionByReference 按参考号获取流水
+func (r *GormWalletRepository) GetTransactionByReference(reference string) (*models.WalletTransaction, error) {
+	reference = strings.TrimSpace(reference)
+	if reference == "" {
+		return nil, nil
+	}
+	var txn models.WalletTransaction
+	if err := r.db.Where("reference = ?", reference).First(&txn).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &txn, nil
+}
+
+// ListTransactions 分页查询钱包流水
+func (r *GormWalletRepository) ListTransactions(filter WalletTransactionListFilter) ([]models.WalletTransaction, int64, error) {
+	query := r.db.Model(&models.WalletTransaction{})
+	if filter.UserID != 0 {
+		query = query.Where("user_id = ?", filter.UserID)
+	}
+	if filter.OrderID != 0 {
+		query = query.Where("order_id = ?", filter.OrderID)
+	}
+	if filter.Type != "" {
+		query = query.Where("type = ?", filter.Type)
+	}
+	if filter.Direction != "" {
+		query = query.Where("direction = ?", filter.Direction)
+	}
+	if filter.CreatedFrom != nil {
+		query = query.Where("created_at >= ?", *filter.CreatedFrom)
+	}
+	if filter.CreatedTo != nil {
+		query = query.Where("created_at <= ?", *filter.CreatedTo)
+	}
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if filter.PageSize > 0 {
+		offset := (filter.Page - 1) * filter.PageSize
+		query = query.Limit(filter.PageSize).Offset(offset)
+	}
+
+	var txns []models.WalletTransaction
+	if err := query.Order("id desc").Find(&txns).Error; err != nil {
+		return nil, 0, err
+	}
+	return txns, total, nil
+}
+
+// CreateRechargeOrder 创建钱包充值支付单
+func (r *GormWalletRepository) CreateRechargeOrder(order *models.WalletRechargeOrder) error {
+	return r.db.Create(order).Error
+}
+
+// UpdateRechargeOrder 更新钱包充值支付单
+func (r *GormWalletRepository) UpdateRechargeOrder(order *models.WalletRechargeOrder) error {
+	return r.db.Save(order).Error
+}
+
+// GetRechargeOrderByRechargeNo 按充值单号查询充值支付单
+func (r *GormWalletRepository) GetRechargeOrderByRechargeNo(userID uint, rechargeNo string) (*models.WalletRechargeOrder, error) {
+	if userID == 0 {
+		return nil, nil
+	}
+	rechargeNo = strings.TrimSpace(rechargeNo)
+	if rechargeNo == "" {
+		return nil, nil
+	}
+	var order models.WalletRechargeOrder
+	if err := r.db.Where("user_id = ? AND recharge_no = ?", userID, rechargeNo).First(&order).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &order, nil
+}
+
+// GetRechargeOrderByPaymentID 按支付ID查询充值支付单
+func (r *GormWalletRepository) GetRechargeOrderByPaymentID(paymentID uint) (*models.WalletRechargeOrder, error) {
+	if paymentID == 0 {
+		return nil, nil
+	}
+	var order models.WalletRechargeOrder
+	if err := r.db.Where("payment_id = ?", paymentID).First(&order).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &order, nil
+}
+
+// GetRechargeOrderByPaymentIDAndUser 按支付ID和用户ID查询充值支付单
+func (r *GormWalletRepository) GetRechargeOrderByPaymentIDAndUser(paymentID uint, userID uint) (*models.WalletRechargeOrder, error) {
+	if paymentID == 0 || userID == 0 {
+		return nil, nil
+	}
+	var order models.WalletRechargeOrder
+	if err := r.db.Where("payment_id = ? AND user_id = ?", paymentID, userID).First(&order).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &order, nil
+}
+
+// GetRechargeOrderByPaymentIDForUpdate 按支付ID加锁查询充值支付单
+func (r *GormWalletRepository) GetRechargeOrderByPaymentIDForUpdate(paymentID uint) (*models.WalletRechargeOrder, error) {
+	if paymentID == 0 {
+		return nil, nil
+	}
+	var order models.WalletRechargeOrder
+	if err := r.db.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("payment_id = ?", paymentID).
+		First(&order).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &order, nil
+}

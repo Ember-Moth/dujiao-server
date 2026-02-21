@@ -117,6 +117,11 @@ func SetupRouter(cfg *config.Config, c *provider.Container) *gin.Engine {
 			user.POST("/payments", publicHandler.CreatePayment)
 			user.POST("/payments/:id/capture", publicHandler.CapturePayment)
 			user.GET("/payments/latest", publicHandler.GetLatestPayment)
+			user.GET("/wallet", publicHandler.GetMyWallet)
+			user.GET("/wallet/transactions", publicHandler.GetMyWalletTransactions)
+			user.POST("/wallet/recharge", publicHandler.RechargeWallet)
+			user.GET("/wallet/recharges/:recharge_no", publicHandler.GetMyWalletRecharge)
+			user.POST("/wallet/recharge/payments/:id/capture", publicHandler.CaptureMyWalletRechargePayment)
 		}
 
 		apiV1.POST("/payments/callback", publicHandler.PaymentCallback)
@@ -200,6 +205,7 @@ func SetupRouter(cfg *config.Config, c *provider.Container) *gin.Engine {
 				authorized.GET("/orders", adminHandler.AdminListOrders)
 				authorized.GET("/orders/:id", adminHandler.AdminGetOrder)
 				authorized.PATCH("/orders/:id", adminHandler.AdminUpdateOrderStatus)
+				authorized.POST("/orders/:id/refund-to-wallet", adminHandler.AdminRefundOrderToWallet)
 				authorized.POST("/fulfillments", adminHandler.AdminCreateFulfillment)
 				authorized.POST("/card-secrets/batch", adminHandler.CreateCardSecretBatch)
 				authorized.POST("/card-secrets/import", adminHandler.ImportCardSecretCSV)
@@ -236,6 +242,9 @@ func SetupRouter(cfg *config.Config, c *provider.Container) *gin.Engine {
 				authorized.GET("/users/:id", adminHandler.GetAdminUser)
 				authorized.PUT("/users/:id", adminHandler.UpdateAdminUser)
 				authorized.GET("/users/:id/coupon-usages", adminHandler.GetAdminUserCouponUsages)
+				authorized.GET("/users/:id/wallet", adminHandler.GetAdminUserWallet)
+				authorized.GET("/users/:id/wallet/transactions", adminHandler.GetAdminUserWalletTransactions)
+				authorized.POST("/users/:id/wallet/adjust", adminHandler.AdjustAdminUserWallet)
 			}
 		}
 	}

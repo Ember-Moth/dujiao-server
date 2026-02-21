@@ -30,11 +30,12 @@ type OrderService struct {
 	promotionRepo   repository.PromotionRepository
 	queueClient     *queue.Client
 	settingService  *SettingService
+	walletService   *WalletService
 	expireMinutes   int
 }
 
 // NewOrderService 创建订单服务
-func NewOrderService(orderRepo repository.OrderRepository, productRepo repository.ProductRepository, cardSecretRepo repository.CardSecretRepository, couponRepo repository.CouponRepository, couponUsageRepo repository.CouponUsageRepository, promotionRepo repository.PromotionRepository, queueClient *queue.Client, settingService *SettingService, expireMinutes int) *OrderService {
+func NewOrderService(orderRepo repository.OrderRepository, productRepo repository.ProductRepository, cardSecretRepo repository.CardSecretRepository, couponRepo repository.CouponRepository, couponUsageRepo repository.CouponUsageRepository, promotionRepo repository.PromotionRepository, queueClient *queue.Client, settingService *SettingService, walletService *WalletService, expireMinutes int) *OrderService {
 	return &OrderService{
 		orderRepo:       orderRepo,
 		productRepo:     productRepo,
@@ -44,6 +45,7 @@ func NewOrderService(orderRepo repository.OrderRepository, productRepo repositor
 		promotionRepo:   promotionRepo,
 		queueClient:     queueClient,
 		settingService:  settingService,
+		walletService:   walletService,
 		expireMinutes:   expireMinutes,
 	}
 }
@@ -285,6 +287,9 @@ func (s *OrderService) createOrder(input orderCreateParams) (*models.Order, erro
 		DiscountAmount:          models.NewMoneyFromDecimal(result.DiscountAmount),
 		PromotionDiscountAmount: models.NewMoneyFromDecimal(result.PromotionDiscountAmount),
 		TotalAmount:             models.NewMoneyFromDecimal(result.TotalAmount),
+		WalletPaidAmount:        models.NewMoneyFromDecimal(decimal.Zero),
+		OnlinePaidAmount:        models.NewMoneyFromDecimal(result.TotalAmount),
+		RefundedAmount:          models.NewMoneyFromDecimal(decimal.Zero),
 		CouponID:                nil,
 		PromotionID:             result.OrderPromotionID,
 		ExpiresAt:               &expiresAt,
@@ -319,6 +324,9 @@ func (s *OrderService) createOrder(input orderCreateParams) (*models.Order, erro
 				DiscountAmount:          models.NewMoneyFromDecimal(plan.CouponDiscount),
 				PromotionDiscountAmount: models.NewMoneyFromDecimal(plan.PromotionDiscount),
 				TotalAmount:             models.NewMoneyFromDecimal(normalizeOrderAmount(plan.TotalAmount.Sub(plan.CouponDiscount))),
+				WalletPaidAmount:        models.NewMoneyFromDecimal(decimal.Zero),
+				OnlinePaidAmount:        models.NewMoneyFromDecimal(normalizeOrderAmount(plan.TotalAmount.Sub(plan.CouponDiscount))),
+				RefundedAmount:          models.NewMoneyFromDecimal(decimal.Zero),
 				CouponID:                nil,
 				PromotionID:             plan.Item.PromotionID,
 				ExpiresAt:               &expiresAt,
@@ -739,6 +747,11 @@ func (s *OrderService) cancelOrderWithChildren(order *models.Order, rollbackCoup
 				}
 			}
 		}
+		if s.walletService != nil {
+			if _, err := s.walletService.ReleaseOrderBalance(tx, order, constants.WalletTxnTypeOrderRefund, "订单取消退回余额"); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -961,6 +974,11 @@ func (s *OrderService) UpdateOrderStatus(orderID uint, targetStatus string) (*mo
 			}
 			if err := releaseManualStockByItems(productRepo, order.Items); err != nil {
 				return err
+			}
+			if s.walletService != nil {
+				if _, err := s.walletService.ReleaseOrderBalance(tx, order, constants.WalletTxnTypeOrderRefund, "订单取消退回余额"); err != nil {
+					return err
+				}
 			}
 			return nil
 		})

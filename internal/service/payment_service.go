@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -27,6 +29,7 @@ import (
 	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // PaymentService 支付服务
@@ -35,32 +38,57 @@ type PaymentService struct {
 	productRepo repository.ProductRepository
 	paymentRepo repository.PaymentRepository
 	channelRepo repository.PaymentChannelRepository
+	walletRepo  repository.WalletRepository
 	queueClient *queue.Client
+	walletSvc   *WalletService
 }
 
 // NewPaymentService 创建支付服务
-func NewPaymentService(orderRepo repository.OrderRepository, productRepo repository.ProductRepository, paymentRepo repository.PaymentRepository, channelRepo repository.PaymentChannelRepository, queueClient *queue.Client) *PaymentService {
+func NewPaymentService(orderRepo repository.OrderRepository, productRepo repository.ProductRepository, paymentRepo repository.PaymentRepository, channelRepo repository.PaymentChannelRepository, walletRepo repository.WalletRepository, queueClient *queue.Client, walletSvc *WalletService) *PaymentService {
 	return &PaymentService{
 		orderRepo:   orderRepo,
 		productRepo: productRepo,
 		paymentRepo: paymentRepo,
 		channelRepo: channelRepo,
+		walletRepo:  walletRepo,
 		queueClient: queueClient,
+		walletSvc:   walletSvc,
 	}
 }
 
 // CreatePaymentInput 创建支付请求
 type CreatePaymentInput struct {
-	OrderID   uint
-	ChannelID uint
-	ClientIP  string
-	Context   context.Context
+	OrderID    uint
+	ChannelID  uint
+	UseBalance bool
+	ClientIP   string
+	Context    context.Context
 }
 
 // CreatePaymentResult 创建支付结果
 type CreatePaymentResult struct {
-	Payment *models.Payment
-	Channel *models.PaymentChannel
+	Payment          *models.Payment
+	Channel          *models.PaymentChannel
+	OrderPaid        bool
+	WalletPaidAmount models.Money
+	OnlinePayAmount  models.Money
+}
+
+// CreateWalletRechargePaymentInput 创建钱包充值支付请求
+type CreateWalletRechargePaymentInput struct {
+	UserID    uint
+	ChannelID uint
+	Amount    models.Money
+	Currency  string
+	Remark    string
+	ClientIP  string
+	Context   context.Context
+}
+
+// CreateWalletRechargePaymentResult 创建钱包充值支付结果
+type CreateWalletRechargePaymentResult struct {
+	Recharge *models.WalletRechargeOrder
+	Payment  *models.Payment
 }
 
 func hasProviderResult(payment *models.Payment) bool {
@@ -131,22 +159,226 @@ func (s *PaymentService) CreatePayment(input CreatePaymentInput) (*CreatePayment
 		"channel_id", input.ChannelID,
 	)
 
-	order, err := s.orderRepo.GetByID(input.OrderID)
+	channel, err := s.channelRepo.GetByID(input.ChannelID)
 	if err != nil {
+		return nil, err
+	}
+	if channel == nil {
+		return nil, ErrPaymentChannelNotFound
+	}
+	if !channel.IsActive {
+		return nil, ErrPaymentChannelInactive
+	}
+
+	feeRate := channel.FeeRate.Decimal.Round(2)
+	if feeRate.LessThan(decimal.Zero) || feeRate.GreaterThan(decimal.NewFromInt(100)) {
+		return nil, ErrPaymentChannelConfigInvalid
+	}
+
+	var payment *models.Payment
+	var order *models.Order
+	reusedPending := false
+	orderPaidByWallet := false
+	now := time.Now()
+
+	err = models.DB.Transaction(func(tx *gorm.DB) error {
+		var lockedOrder models.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Preload("Items").
+			Preload("Children").
+			Preload("Children.Items").
+			First(&lockedOrder, input.OrderID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrOrderNotFound
+			}
+			return ErrOrderFetchFailed
+		}
+		if lockedOrder.ParentID != nil {
+			return ErrPaymentInvalid
+		}
+		if lockedOrder.Status != constants.OrderStatusPendingPayment {
+			return ErrOrderStatusInvalid
+		}
+		if lockedOrder.ExpiresAt != nil && !lockedOrder.ExpiresAt.After(time.Now()) {
+			return ErrOrderStatusInvalid
+		}
+
+		paymentRepo := s.paymentRepo.WithTx(tx)
+		existing, err := paymentRepo.GetLatestPendingByOrderChannel(lockedOrder.ID, channel.ID, time.Now())
+		if err != nil {
+			return ErrPaymentCreateFailed
+		}
+		if existing != nil && hasProviderResult(existing) {
+			reusedPending = true
+			payment = existing
+			order = &lockedOrder
+			return nil
+		}
+
+		if s.walletSvc != nil {
+			if input.UseBalance {
+				if _, err := s.walletSvc.ApplyOrderBalance(tx, &lockedOrder, true); err != nil {
+					return err
+				}
+			} else if lockedOrder.WalletPaidAmount.Decimal.GreaterThan(decimal.Zero) {
+				if _, err := s.walletSvc.ReleaseOrderBalance(tx, &lockedOrder, constants.WalletTxnTypeOrderRefund, "用户改为在线支付，退回余额"); err != nil {
+					return err
+				}
+			}
+		}
+
+		onlineAmount := normalizeOrderAmount(lockedOrder.TotalAmount.Decimal.Sub(lockedOrder.WalletPaidAmount.Decimal))
+		if onlineAmount.LessThanOrEqual(decimal.Zero) {
+			if err := s.markOrderPaid(tx, &lockedOrder, time.Now()); err != nil {
+				return err
+			}
+			orderPaidByWallet = true
+			order = &lockedOrder
+			return nil
+		}
+
+		feeAmount := decimal.Zero
+		if feeRate.GreaterThan(decimal.Zero) {
+			feeAmount = onlineAmount.Mul(feeRate).Div(decimal.NewFromInt(100)).Round(2)
+		}
+		payableAmount := onlineAmount.Add(feeAmount).Round(2)
+		payment = &models.Payment{
+			OrderID:         lockedOrder.ID,
+			ChannelID:       channel.ID,
+			ProviderType:    channel.ProviderType,
+			ChannelType:     channel.ChannelType,
+			InteractionMode: channel.InteractionMode,
+			Amount:          models.NewMoneyFromDecimal(payableAmount),
+			FeeRate:         models.NewMoneyFromDecimal(feeRate),
+			FeeAmount:       models.NewMoneyFromDecimal(feeAmount),
+			Currency:        lockedOrder.Currency,
+			Status:          constants.PaymentStatusInitiated,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		}
+		if shouldUseCNYPaymentCurrency(channel) {
+			payment.Currency = "CNY"
+		}
+
+		if err := paymentRepo.Create(payment); err != nil {
+			return ErrPaymentCreateFailed
+		}
+		if err := tx.Model(&models.Order{}).Where("id = ?", lockedOrder.ID).Updates(map[string]interface{}{
+			"online_paid_amount": models.NewMoneyFromDecimal(onlineAmount),
+			"updated_at":         time.Now(),
+		}).Error; err != nil {
+			return ErrOrderUpdateFailed
+		}
+		lockedOrder.OnlinePaidAmount = models.NewMoneyFromDecimal(onlineAmount)
+		lockedOrder.UpdatedAt = time.Now()
+		order = &lockedOrder
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if order == nil {
 		return nil, ErrOrderFetchFailed
 	}
-	if order == nil {
-		return nil, ErrOrderNotFound
+
+	if reusedPending {
+		log.Infow("payment_create_reuse_pending",
+			"payment_id", payment.ID,
+			"provider_type", payment.ProviderType,
+			"channel_type", payment.ChannelType,
+		)
+		return &CreatePaymentResult{
+			Payment:          payment,
+			Channel:          channel,
+			WalletPaidAmount: order.WalletPaidAmount,
+			OnlinePayAmount:  order.OnlinePaidAmount,
+		}, nil
 	}
-	if order.ParentID != nil {
+
+	if orderPaidByWallet {
+		s.enqueueOrderPaidAsync(order, log)
+		return &CreatePaymentResult{
+			Payment:          nil,
+			Channel:          nil,
+			OrderPaid:        true,
+			WalletPaidAmount: order.WalletPaidAmount,
+			OnlinePayAmount:  models.NewMoneyFromDecimal(decimal.Zero),
+		}, nil
+	}
+
+	if payment == nil {
+		return nil, ErrPaymentCreateFailed
+	}
+
+	if err := s.applyProviderPayment(input, order, channel, payment); err != nil {
+		rollbackErr := models.DB.Transaction(func(tx *gorm.DB) error {
+			paymentRepo := s.paymentRepo.WithTx(tx)
+			payment.Status = constants.PaymentStatusFailed
+			payment.UpdatedAt = time.Now()
+			if updateErr := paymentRepo.Update(payment); updateErr != nil {
+				return updateErr
+			}
+			if s.walletSvc == nil {
+				return nil
+			}
+			var lockedOrder models.Order
+			if findErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&lockedOrder, order.ID).Error; findErr != nil {
+				return findErr
+			}
+			_, refundErr := s.walletSvc.ReleaseOrderBalance(tx, &lockedOrder, constants.WalletTxnTypeOrderRefund, "在线支付创建失败，退回余额")
+			return refundErr
+		})
+		if rollbackErr != nil {
+			log.Errorw("payment_create_provider_failed_with_rollback_error",
+				"payment_id", payment.ID,
+				"order_id", order.ID,
+				"provider_type", payment.ProviderType,
+				"channel_type", payment.ChannelType,
+				"provider_error", err,
+				"rollback_error", rollbackErr,
+			)
+		} else {
+			log.Errorw("payment_create_provider_failed",
+				"payment_id", payment.ID,
+				"provider_type", payment.ProviderType,
+				"channel_type", payment.ChannelType,
+				"error", err,
+			)
+		}
+		return nil, err
+	}
+
+	log.Infow("payment_create_success",
+		"payment_id", payment.ID,
+		"provider_type", payment.ProviderType,
+		"channel_type", payment.ChannelType,
+		"interaction_mode", payment.InteractionMode,
+		"currency", payment.Currency,
+		"amount", payment.Amount.String(),
+		"wallet_paid_amount", order.WalletPaidAmount.String(),
+		"online_pay_amount", order.OnlinePaidAmount.String(),
+	)
+
+	return &CreatePaymentResult{
+		Payment:          payment,
+		Channel:          channel,
+		WalletPaidAmount: order.WalletPaidAmount,
+		OnlinePayAmount:  order.OnlinePaidAmount,
+	}, nil
+}
+
+// CreateWalletRechargePayment 创建钱包充值支付单
+func (s *PaymentService) CreateWalletRechargePayment(input CreateWalletRechargePaymentInput) (*CreateWalletRechargePaymentResult, error) {
+	if input.UserID == 0 || input.ChannelID == 0 {
 		return nil, ErrPaymentInvalid
 	}
-	if order.Status != constants.OrderStatusPendingPayment {
-		return nil, ErrOrderStatusInvalid
+	amount := input.Amount.Decimal.Round(2)
+	if amount.LessThanOrEqual(decimal.Zero) {
+		return nil, ErrWalletInvalidAmount
 	}
-	now := time.Now()
-	if order.ExpiresAt != nil && !order.ExpiresAt.After(now) {
-		return nil, ErrOrderStatusInvalid
+	if s.walletRepo == nil {
+		return nil, ErrPaymentCreateFailed
 	}
 
 	channel, err := s.channelRepo.GetByID(input.ChannelID)
@@ -160,75 +392,116 @@ func (s *PaymentService) CreatePayment(input CreatePaymentInput) (*CreatePayment
 		return nil, ErrPaymentChannelInactive
 	}
 
-	existing, err := s.paymentRepo.GetLatestPendingByOrderChannel(order.ID, channel.ID, now)
-	if err != nil {
-		return nil, ErrPaymentCreateFailed
-	}
-	if existing != nil && hasProviderResult(existing) {
-		log.Infow("payment_create_reuse_pending",
-			"payment_id", existing.ID,
-			"provider_type", existing.ProviderType,
-			"channel_type", existing.ChannelType,
-		)
-		return &CreatePaymentResult{Payment: existing, Channel: channel}, nil
-	}
-
 	feeRate := channel.FeeRate.Decimal.Round(2)
 	if feeRate.LessThan(decimal.Zero) || feeRate.GreaterThan(decimal.NewFromInt(100)) {
 		return nil, ErrPaymentChannelConfigInvalid
 	}
 	feeAmount := decimal.Zero
 	if feeRate.GreaterThan(decimal.Zero) {
-		feeAmount = order.TotalAmount.Decimal.Mul(feeRate).Div(decimal.NewFromInt(100)).Round(2)
+		feeAmount = amount.Mul(feeRate).Div(decimal.NewFromInt(100)).Round(2)
 	}
-	payableAmount := order.TotalAmount.Decimal.Add(feeAmount).Round(2)
-
-	payment := &models.Payment{
-		OrderID:         order.ID,
-		ChannelID:       channel.ID,
-		ProviderType:    channel.ProviderType,
-		ChannelType:     channel.ChannelType,
-		InteractionMode: channel.InteractionMode,
-		Amount:          models.NewMoneyFromDecimal(payableAmount),
-		FeeRate:         models.NewMoneyFromDecimal(feeRate),
-		FeeAmount:       models.NewMoneyFromDecimal(feeAmount),
-		Currency:        order.Currency,
-		Status:          constants.PaymentStatusInitiated,
-		CreatedAt:       now,
-		UpdatedAt:       now,
-	}
+	payableAmount := amount.Add(feeAmount).Round(2)
+	currency := normalizeWalletCurrency(input.Currency)
 	if shouldUseCNYPaymentCurrency(channel) {
-		payment.Currency = "CNY"
+		currency = "CNY"
 	}
+	now := time.Now()
 
-	if err := s.paymentRepo.Create(payment); err != nil {
-		log.Errorw("payment_create_persist_failed", "error", err)
+	var payment *models.Payment
+	var recharge *models.WalletRechargeOrder
+	err = models.DB.Transaction(func(tx *gorm.DB) error {
+		rechargeNo := generateWalletRechargeNo()
+		paymentRepo := s.paymentRepo.WithTx(tx)
+		payment = &models.Payment{
+			OrderID:         0,
+			ChannelID:       channel.ID,
+			ProviderType:    channel.ProviderType,
+			ChannelType:     channel.ChannelType,
+			InteractionMode: channel.InteractionMode,
+			Amount:          models.NewMoneyFromDecimal(payableAmount),
+			FeeRate:         models.NewMoneyFromDecimal(feeRate),
+			FeeAmount:       models.NewMoneyFromDecimal(feeAmount),
+			Currency:        currency,
+			Status:          constants.PaymentStatusInitiated,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		}
+		if err := paymentRepo.Create(payment); err != nil {
+			return ErrPaymentCreateFailed
+		}
+
+		rechargeRepo := s.walletRepo.WithTx(tx)
+		recharge = &models.WalletRechargeOrder{
+			RechargeNo:      rechargeNo,
+			UserID:          input.UserID,
+			PaymentID:       payment.ID,
+			ChannelID:       channel.ID,
+			ProviderType:    channel.ProviderType,
+			ChannelType:     channel.ChannelType,
+			InteractionMode: channel.InteractionMode,
+			Amount:          models.NewMoneyFromDecimal(amount),
+			PayableAmount:   models.NewMoneyFromDecimal(payableAmount),
+			FeeRate:         models.NewMoneyFromDecimal(feeRate),
+			FeeAmount:       models.NewMoneyFromDecimal(feeAmount),
+			Currency:        currency,
+			Status:          constants.WalletRechargeStatusPending,
+			Remark:          cleanWalletRemark(input.Remark, "余额充值"),
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		}
+		if err := rechargeRepo.CreateRechargeOrder(recharge); err != nil {
+			return ErrPaymentCreateFailed
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if payment == nil || recharge == nil {
 		return nil, ErrPaymentCreateFailed
 	}
 
-	if err := s.applyProviderPayment(input, order, channel, payment); err != nil {
-		payment.Status = constants.PaymentStatusFailed
-		payment.UpdatedAt = time.Now()
-		_ = s.paymentRepo.Update(payment)
-		log.Errorw("payment_create_provider_failed",
-			"payment_id", payment.ID,
-			"provider_type", payment.ProviderType,
-			"channel_type", payment.ChannelType,
-			"error", err,
-		)
+	// 复用支付网关下单逻辑，使用充值单号作为业务单号。
+	virtualOrder := &models.Order{
+		OrderNo: recharge.RechargeNo,
+		UserID:  recharge.UserID,
+	}
+	if err := s.applyProviderPayment(CreatePaymentInput{
+		ChannelID: input.ChannelID,
+		ClientIP:  input.ClientIP,
+		Context:   input.Context,
+	}, virtualOrder, channel, payment); err != nil {
+		_ = models.DB.Transaction(func(tx *gorm.DB) error {
+			rechargeRepo := s.walletRepo.WithTx(tx)
+			paymentRepo := s.paymentRepo.WithTx(tx)
+			failedAt := time.Now()
+			payment.Status = constants.PaymentStatusFailed
+			payment.UpdatedAt = failedAt
+			if updateErr := paymentRepo.Update(payment); updateErr != nil {
+				return updateErr
+			}
+			lockedRecharge, getErr := rechargeRepo.GetRechargeOrderByPaymentIDForUpdate(payment.ID)
+			if getErr != nil || lockedRecharge == nil {
+				return getErr
+			}
+			lockedRecharge.Status = constants.WalletRechargeStatusFailed
+			lockedRecharge.UpdatedAt = failedAt
+			return rechargeRepo.UpdateRechargeOrder(lockedRecharge)
+		})
 		return nil, err
 	}
 
-	log.Infow("payment_create_success",
-		"payment_id", payment.ID,
-		"provider_type", payment.ProviderType,
-		"channel_type", payment.ChannelType,
-		"interaction_mode", payment.InteractionMode,
-		"currency", payment.Currency,
-		"amount", payment.Amount.String(),
-	)
-
-	return &CreatePaymentResult{Payment: payment, Channel: channel}, nil
+	reloadedRecharge, err := s.walletRepo.GetRechargeOrderByPaymentID(payment.ID)
+	if err != nil {
+		return nil, ErrPaymentUpdateFailed
+	}
+	if reloadedRecharge != nil {
+		recharge = reloadedRecharge
+	}
+	return &CreateWalletRechargePaymentResult{
+		Recharge: recharge,
+		Payment:  payment,
+	}, nil
 }
 
 // HandleCallback 处理支付回调
@@ -252,6 +525,9 @@ func (s *PaymentService) HandleCallback(input PaymentCallbackInput) (*models.Pay
 	}
 	if payment == nil {
 		return nil, ErrPaymentNotFound
+	}
+	if payment.OrderID == 0 {
+		return s.handleWalletRechargeCallback(payment, status, input)
 	}
 
 	order, err := s.orderRepo.GetByID(payment.OrderID)
@@ -295,44 +571,8 @@ func (s *PaymentService) HandleCallback(input PaymentCallbackInput) (*models.Pay
 		)
 		return nil, err
 	}
-	if orderPaid && s.queueClient != nil {
-		if err := s.queueClient.EnqueueOrderStatusEmail(queue.OrderStatusEmailPayload{
-			OrderID: order.ID,
-			Status:  constants.OrderStatusPaid,
-		}); err != nil {
-			log.Warnw("payment_enqueue_status_email_failed",
-				"order_id", order.ID,
-				"order_no", order.OrderNo,
-				"status", constants.OrderStatusPaid,
-				"error", err,
-			)
-		}
-		if len(order.Children) > 0 {
-			for _, child := range order.Children {
-				if shouldAutoFulfill(&child) {
-					if err := s.queueClient.EnqueueOrderAutoFulfill(queue.OrderAutoFulfillPayload{
-						OrderID: child.ID,
-					}, asynq.MaxRetry(3)); err != nil {
-						log.Warnw("payment_enqueue_auto_fulfill_failed",
-							"order_id", order.ID,
-							"child_order_id", child.ID,
-							"order_no", order.OrderNo,
-							"error", err,
-						)
-					}
-				}
-			}
-		} else if shouldAutoFulfill(order) {
-			if err := s.queueClient.EnqueueOrderAutoFulfill(queue.OrderAutoFulfillPayload{
-				OrderID: order.ID,
-			}, asynq.MaxRetry(3)); err != nil {
-				log.Warnw("payment_enqueue_auto_fulfill_failed",
-					"order_id", order.ID,
-					"order_no", order.OrderNo,
-					"error", err,
-				)
-			}
-		}
+	if orderPaid {
+		s.enqueueOrderPaidAsync(order, log)
 	}
 	log.Infow("payment_callback_processed",
 		"order_id", order.ID,
@@ -342,6 +582,122 @@ func (s *PaymentService) HandleCallback(input PaymentCallbackInput) (*models.Pay
 		"order_paid", orderPaid,
 	)
 	return updated, nil
+}
+
+func (s *PaymentService) handleWalletRechargeCallback(payment *models.Payment, status string, input PaymentCallbackInput) (*models.Payment, error) {
+	if s.walletRepo == nil {
+		return nil, ErrPaymentUpdateFailed
+	}
+	recharge, err := s.walletRepo.GetRechargeOrderByPaymentID(payment.ID)
+	if err != nil {
+		return nil, ErrPaymentUpdateFailed
+	}
+	if recharge == nil {
+		return nil, ErrWalletRechargeNotFound
+	}
+
+	if input.ChannelID != 0 && input.ChannelID != payment.ChannelID {
+		return nil, ErrPaymentInvalid
+	}
+	if input.OrderNo != "" && input.OrderNo != recharge.RechargeNo {
+		return nil, ErrPaymentInvalid
+	}
+	if input.Currency != "" && strings.ToUpper(strings.TrimSpace(input.Currency)) != strings.ToUpper(strings.TrimSpace(payment.Currency)) {
+		return nil, ErrPaymentCurrencyMismatch
+	}
+	if !input.Amount.Decimal.IsZero() && input.Amount.Decimal.Cmp(payment.Amount.Decimal) != 0 {
+		return nil, ErrPaymentAmountMismatch
+	}
+
+	// 幂等处理：已成功状态仅更新回调元信息。
+	if payment.Status == constants.PaymentStatusSuccess {
+		return s.updateCallbackMeta(payment, constants.PaymentStatusSuccess, input)
+	}
+	if payment.Status == status {
+		return s.updateCallbackMeta(payment, status, input)
+	}
+
+	now := time.Now()
+	updated, err := s.applyWalletRechargePaymentUpdate(payment, status, input, now)
+	if err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+func (s *PaymentService) applyWalletRechargePaymentUpdate(payment *models.Payment, status string, input PaymentCallbackInput, now time.Time) (*models.Payment, error) {
+	paymentVal := payment
+
+	switch status {
+	case constants.PaymentStatusSuccess:
+		paidAt := now
+		if input.PaidAt != nil {
+			paidAt = *input.PaidAt
+		}
+		payment.PaidAt = &paidAt
+	case constants.PaymentStatusExpired:
+		payment.ExpiredAt = &now
+	}
+
+	payment.Status = status
+	payment.CallbackAt = &now
+	payment.UpdatedAt = now
+	if input.ProviderRef != "" {
+		payment.ProviderRef = input.ProviderRef
+	}
+	if input.Payload != nil {
+		payment.ProviderPayload = input.Payload
+	}
+
+	err := models.DB.Transaction(func(tx *gorm.DB) error {
+		paymentRepo := s.paymentRepo.WithTx(tx)
+		rechargeRepo := s.walletRepo.WithTx(tx)
+
+		if err := paymentRepo.Update(payment); err != nil {
+			return ErrPaymentUpdateFailed
+		}
+		recharge, err := rechargeRepo.GetRechargeOrderByPaymentIDForUpdate(payment.ID)
+		if err != nil {
+			return ErrPaymentUpdateFailed
+		}
+		if recharge == nil {
+			return ErrWalletRechargeNotFound
+		}
+		if recharge.Status == constants.WalletRechargeStatusSuccess {
+			return nil
+		}
+
+		switch status {
+		case constants.PaymentStatusSuccess:
+			if s.walletSvc == nil {
+				return ErrWalletAccountNotFound
+			}
+			if _, err := s.walletSvc.ApplyRechargePayment(tx, recharge); err != nil {
+				return err
+			}
+			recharge.Status = constants.WalletRechargeStatusSuccess
+			paidAt := now
+			if payment.PaidAt != nil {
+				paidAt = *payment.PaidAt
+			}
+			recharge.PaidAt = &paidAt
+		case constants.PaymentStatusFailed:
+			recharge.Status = constants.WalletRechargeStatusFailed
+		case constants.PaymentStatusExpired:
+			recharge.Status = constants.WalletRechargeStatusExpired
+		default:
+			recharge.Status = constants.WalletRechargeStatusPending
+		}
+		recharge.UpdatedAt = now
+		if err := rechargeRepo.UpdateRechargeOrder(recharge); err != nil {
+			return ErrPaymentUpdateFailed
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return paymentVal, nil
 }
 
 // ListPayments 管理端支付列表
@@ -1107,59 +1463,21 @@ func (s *PaymentService) applyPaymentUpdate(payment *models.Payment, order *mode
 
 	err := models.DB.Transaction(func(tx *gorm.DB) error {
 		paymentRepo := s.paymentRepo.WithTx(tx)
-		orderRepo := s.orderRepo.WithTx(tx)
-		productRepo := s.productRepo.WithTx(tx)
 
 		if err := paymentRepo.Update(payment); err != nil {
 			return ErrPaymentUpdateFailed
 		}
 
 		if status == constants.PaymentStatusSuccess && order.Status != constants.OrderStatusPaid {
-			if !isTransitionAllowed(order.Status, constants.OrderStatusPaid) {
-				return ErrOrderStatusInvalid
-			}
-			orderUpdates := map[string]interface{}{
-				"paid_at":    now,
-				"updated_at": now,
-			}
-			if err := orderRepo.UpdateStatus(order.ID, constants.OrderStatusPaid, orderUpdates); err != nil {
-				return ErrOrderUpdateFailed
-			}
-			order.Status = constants.OrderStatusPaid
-			order.PaidAt = &now
-			order.UpdatedAt = now
-			if len(order.Children) > 0 {
-				for idx := range order.Children {
-					child := &order.Children[idx]
-					childStatus := constants.OrderStatusPaid
-					if shouldMarkFulfilling(child) {
-						childStatus = constants.OrderStatusFulfilling
-					}
-					if err := orderRepo.UpdateStatus(child.ID, childStatus, orderUpdates); err != nil {
-						return ErrOrderUpdateFailed
-					}
-					if err := consumeManualStockByItems(productRepo, child.Items); err != nil {
-						return err
-					}
-					child.Status = childStatus
-					child.PaidAt = &now
-					child.UpdatedAt = now
-				}
-				parentStatus := calcParentStatus(order.Children, constants.OrderStatusPaid)
-				if parentStatus != "" && parentStatus != constants.OrderStatusPaid {
-					if err := orderRepo.UpdateStatus(order.ID, parentStatus, map[string]interface{}{
-						"updated_at": now,
-					}); err != nil {
-						return ErrOrderUpdateFailed
-					}
-					order.Status = parentStatus
-				}
-			} else {
-				if err := consumeManualStockByItems(productRepo, order.Items); err != nil {
-					return err
-				}
+			if err := s.markOrderPaid(tx, order, now); err != nil {
+				return err
 			}
 			orderPaid = true
+		}
+		if (status == constants.PaymentStatusFailed || status == constants.PaymentStatusExpired) && order.Status == constants.OrderStatusPendingPayment && s.walletSvc != nil {
+			if _, err := s.walletSvc.ReleaseOrderBalance(tx, order, constants.WalletTxnTypeOrderRefund, "在线支付失败，退回余额"); err != nil {
+				return err
+			}
 		}
 
 		return nil
@@ -1168,6 +1486,115 @@ func (s *PaymentService) applyPaymentUpdate(payment *models.Payment, order *mode
 		return nil, false, err
 	}
 	return returnVal, orderPaid, nil
+}
+
+// markOrderPaid 在事务内将订单更新为已支付并处理库存
+func (s *PaymentService) markOrderPaid(tx *gorm.DB, order *models.Order, now time.Time) error {
+	if order == nil {
+		return ErrOrderNotFound
+	}
+	if !isTransitionAllowed(order.Status, constants.OrderStatusPaid) {
+		return ErrOrderStatusInvalid
+	}
+	orderRepo := s.orderRepo.WithTx(tx)
+	productRepo := s.productRepo.WithTx(tx)
+
+	onlineAmount := normalizeOrderAmount(order.TotalAmount.Decimal.Sub(order.WalletPaidAmount.Decimal))
+	orderUpdates := map[string]interface{}{
+		"paid_at":            now,
+		"online_paid_amount": models.NewMoneyFromDecimal(onlineAmount),
+		"updated_at":         now,
+	}
+	if err := orderRepo.UpdateStatus(order.ID, constants.OrderStatusPaid, orderUpdates); err != nil {
+		return ErrOrderUpdateFailed
+	}
+	order.Status = constants.OrderStatusPaid
+	order.PaidAt = &now
+	order.OnlinePaidAmount = models.NewMoneyFromDecimal(onlineAmount)
+	order.UpdatedAt = now
+
+	if len(order.Children) > 0 {
+		for idx := range order.Children {
+			child := &order.Children[idx]
+			childStatus := constants.OrderStatusPaid
+			if shouldMarkFulfilling(child) {
+				childStatus = constants.OrderStatusFulfilling
+			}
+			if err := orderRepo.UpdateStatus(child.ID, childStatus, map[string]interface{}{
+				"paid_at":    now,
+				"updated_at": now,
+			}); err != nil {
+				return ErrOrderUpdateFailed
+			}
+			if err := consumeManualStockByItems(productRepo, child.Items); err != nil {
+				return err
+			}
+			child.Status = childStatus
+			child.PaidAt = &now
+			child.UpdatedAt = now
+		}
+		parentStatus := calcParentStatus(order.Children, constants.OrderStatusPaid)
+		if parentStatus != "" && parentStatus != constants.OrderStatusPaid {
+			if err := orderRepo.UpdateStatus(order.ID, parentStatus, map[string]interface{}{
+				"online_paid_amount": models.NewMoneyFromDecimal(onlineAmount),
+				"updated_at":         now,
+			}); err != nil {
+				return ErrOrderUpdateFailed
+			}
+			order.Status = parentStatus
+		}
+		return nil
+	}
+
+	if err := consumeManualStockByItems(productRepo, order.Items); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *PaymentService) enqueueOrderPaidAsync(order *models.Order, log *zap.SugaredLogger) {
+	if s.queueClient == nil || order == nil {
+		return
+	}
+	if err := s.queueClient.EnqueueOrderStatusEmail(queue.OrderStatusEmailPayload{
+		OrderID: order.ID,
+		Status:  constants.OrderStatusPaid,
+	}); err != nil {
+		log.Warnw("payment_enqueue_status_email_failed",
+			"order_id", order.ID,
+			"order_no", order.OrderNo,
+			"status", constants.OrderStatusPaid,
+			"error", err,
+		)
+	}
+	if len(order.Children) > 0 {
+		for _, child := range order.Children {
+			if shouldAutoFulfill(&child) {
+				if err := s.queueClient.EnqueueOrderAutoFulfill(queue.OrderAutoFulfillPayload{
+					OrderID: child.ID,
+				}, asynq.MaxRetry(3)); err != nil {
+					log.Warnw("payment_enqueue_auto_fulfill_failed",
+						"order_id", order.ID,
+						"child_order_id", child.ID,
+						"order_no", order.OrderNo,
+						"error", err,
+					)
+				}
+			}
+		}
+		return
+	}
+	if shouldAutoFulfill(order) {
+		if err := s.queueClient.EnqueueOrderAutoFulfill(queue.OrderAutoFulfillPayload{
+			OrderID: order.ID,
+		}, asynq.MaxRetry(3)); err != nil {
+			log.Warnw("payment_enqueue_auto_fulfill_failed",
+				"order_id", order.ID,
+				"order_no", order.OrderNo,
+				"error", err,
+			)
+		}
+	}
 }
 
 func (s *PaymentService) applyProviderPayment(input CreatePaymentInput, order *models.Order, channel *models.PaymentChannel, payment *models.Payment) (err error) {
@@ -1603,6 +2030,27 @@ func pickFirstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func generateWalletRechargeNo() string {
+	now := time.Now().Format("20060102150405")
+	return fmt.Sprintf("WR%s%s", now, randNumericCode(6))
+}
+
+func randNumericCode(length int) string {
+	if length <= 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i := 0; i < length; i++ {
+		n, err := rand.Int(rand.Reader, big.NewInt(10))
+		if err != nil {
+			b.WriteString("0")
+			continue
+		}
+		b.WriteString(strconv.FormatInt(n.Int64(), 10))
+	}
+	return b.String()
 }
 
 func appendURLQuery(rawURL string, params map[string]string) string {

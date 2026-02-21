@@ -25,8 +25,9 @@ import (
 
 // CreatePaymentRequest 创建支付请求
 type CreatePaymentRequest struct {
-	OrderID   uint `json:"order_id" binding:"required"`
-	ChannelID uint `json:"channel_id" binding:"required"`
+	OrderID    uint `json:"order_id" binding:"required"`
+	ChannelID  uint `json:"channel_id" binding:"required"`
+	UseBalance bool `json:"use_balance"`
 }
 
 // LatestPaymentQuery 查询最新待支付记录
@@ -72,25 +73,32 @@ func (h *Handler) CreatePayment(c *gin.Context) {
 	}
 
 	result, err := h.PaymentService.CreatePayment(service.CreatePaymentInput{
-		OrderID:   req.OrderID,
-		ChannelID: req.ChannelID,
-		ClientIP:  c.ClientIP(),
-		Context:   c.Request.Context(),
+		OrderID:    req.OrderID,
+		ChannelID:  req.ChannelID,
+		UseBalance: req.UseBalance,
+		ClientIP:   c.ClientIP(),
+		Context:    c.Request.Context(),
 	})
 	if err != nil {
 		respondPaymentCreateError(c, err)
 		return
 	}
 
-	response.Success(c, gin.H{
-		"payment_id":       result.Payment.ID,
-		"provider_type":    result.Payment.ProviderType,
-		"channel_type":     result.Payment.ChannelType,
-		"interaction_mode": result.Payment.InteractionMode,
-		"pay_url":          result.Payment.PayURL,
-		"qr_code":          result.Payment.QRCode,
-		"expires_at":       result.Payment.ExpiredAt,
-	})
+	resp := gin.H{
+		"order_paid":         result.OrderPaid,
+		"wallet_paid_amount": result.WalletPaidAmount,
+		"online_pay_amount":  result.OnlinePayAmount,
+	}
+	if result.Payment != nil {
+		resp["payment_id"] = result.Payment.ID
+		resp["provider_type"] = result.Payment.ProviderType
+		resp["channel_type"] = result.Payment.ChannelType
+		resp["interaction_mode"] = result.Payment.InteractionMode
+		resp["pay_url"] = result.Payment.PayURL
+		resp["qr_code"] = result.Payment.QRCode
+		resp["expires_at"] = result.Payment.ExpiredAt
+	}
+	response.Success(c, resp)
 }
 
 // CapturePayment 用户捕获支付。
@@ -867,6 +875,8 @@ func respondPaymentCreateError(c *gin.Context, err error) {
 		respondError(c, response.CodeBadRequest, "error.payment_gateway_request_failed", nil)
 	case errors.Is(err, service.ErrPaymentGatewayResponseInvalid):
 		respondError(c, response.CodeBadRequest, "error.payment_gateway_response_invalid", nil)
+	case errors.Is(err, service.ErrWalletNotSupportedForGuest):
+		respondError(c, response.CodeBadRequest, "error.payment_invalid", nil)
 	default:
 		respondError(c, response.CodeInternal, "error.payment_create_failed", err)
 	}
@@ -981,12 +991,12 @@ func (h *Handler) HandleEpusdtCallback(c *gin.Context) bool {
 	}
 
 	now := time.Now()
-	
+
 	// 将回调数据结构体序列化为 JSON 保存
 	payloadBytes, _ := json.Marshal(data)
 	var payload models.JSON
 	_ = json.Unmarshal(payloadBytes, &payload)
-	
+
 	input := service.PaymentCallbackInput{
 		PaymentID:   payment.ID,
 		OrderNo:     data.OrderID,

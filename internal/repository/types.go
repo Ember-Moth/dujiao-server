@@ -88,6 +88,25 @@ type UserListFilter struct {
 	LastLoginTo   *time.Time
 }
 
+// WalletAccountListFilter 查询钱包账户列表的过滤条件
+type WalletAccountListFilter struct {
+	Page     int
+	PageSize int
+	UserID   uint
+}
+
+// WalletTransactionListFilter 查询钱包流水列表的过滤条件
+type WalletTransactionListFilter struct {
+	Page        int
+	PageSize    int
+	UserID      uint
+	OrderID     uint
+	Type        string
+	Direction   string
+	CreatedFrom *time.Time
+	CreatedTo   *time.Time
+}
+
 // UserLoginLogListFilter 查询用户登录日志列表的过滤条件
 type UserLoginLogListFilter struct {
 	Page        int

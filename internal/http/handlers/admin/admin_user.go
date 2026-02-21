@@ -14,6 +14,7 @@ import (
 	"github.com/dujiao-next/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -49,6 +50,18 @@ type UserCouponUsageItem struct {
 	CreatedAt      time.Time                `json:"created_at"`
 	ScopeRefIDs    []uint                   `json:"scope_ref_ids"`
 	ScopeProducts  []UserCouponUsageProduct `json:"scope_products"`
+}
+
+// AdminUserListItem 管理端用户列表项
+type AdminUserListItem struct {
+	models.User
+	WalletBalance models.Money `json:"wallet_balance"`
+}
+
+// AdminUserDetail 管理端用户详情
+type AdminUserDetail struct {
+	models.User
+	WalletBalance models.Money `json:"wallet_balance"`
 }
 
 // GetAdminUsers 获取用户列表
@@ -100,13 +113,34 @@ func (h *Handler) GetAdminUsers(c *gin.Context) {
 		return
 	}
 
+	userIDs := make([]uint, 0, len(users))
+	for _, user := range users {
+		userIDs = append(userIDs, user.ID)
+	}
+	balanceMap, err := h.WalletService.GetBalancesByUserIDs(userIDs)
+	if err != nil {
+		respondError(c, response.CodeInternal, "error.user_fetch_failed", err)
+		return
+	}
+	items := make([]AdminUserListItem, 0, len(users))
+	for _, user := range users {
+		balance, ok := balanceMap[user.ID]
+		if !ok {
+			balance = models.NewMoneyFromDecimal(decimal.Zero)
+		}
+		items = append(items, AdminUserListItem{
+			User:          user,
+			WalletBalance: balance,
+		})
+	}
+
 	pagination := response.Pagination{
 		Page:      page,
 		PageSize:  pageSize,
 		Total:     total,
 		TotalPage: (total + int64(pageSize) - 1) / int64(pageSize),
 	}
-	response.SuccessWithPage(c, users, pagination)
+	response.SuccessWithPage(c, items, pagination)
 }
 
 // GetAdminUser 获取用户详情
@@ -126,8 +160,15 @@ func (h *Handler) GetAdminUser(c *gin.Context) {
 		respondError(c, response.CodeNotFound, "error.user_not_found", nil)
 		return
 	}
-
-	response.Success(c, user)
+	account, err := h.WalletService.GetAccount(user.ID)
+	if err != nil {
+		respondError(c, response.CodeInternal, "error.user_fetch_failed", err)
+		return
+	}
+	response.Success(c, AdminUserDetail{
+		User:          *user,
+		WalletBalance: account.Balance,
+	})
 }
 
 // UpdateAdminUser 更新用户信息

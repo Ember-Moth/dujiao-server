@@ -37,16 +37,16 @@ const (
 
 // 支付渠道类型常量
 const (
-	PaymentChannelTypeWechat   = "wechat"
-	PaymentChannelTypeWxpay    = "wxpay"
-	PaymentChannelTypeAlipay   = "alipay"
-	PaymentChannelTypePaypal   = "paypal"
-	PaymentChannelTypeStripe   = "stripe"
-	PaymentChannelTypeQqpay    = "qqpay"
-	PaymentChannelTypeUsdt     = "usdt"
+	PaymentChannelTypeWechat    = "wechat"
+	PaymentChannelTypeWxpay     = "wxpay"
+	PaymentChannelTypeAlipay    = "alipay"
+	PaymentChannelTypePaypal    = "paypal"
+	PaymentChannelTypeStripe    = "stripe"
+	PaymentChannelTypeQqpay     = "qqpay"
+	PaymentChannelTypeUsdt      = "usdt"
 	PaymentChannelTypeUsdtTrc20 = "usdt-trc20"
 	PaymentChannelTypeUsdcTrc20 = "usdc-trc20"
-	PaymentChannelTypeTrx      = "trx"
+	PaymentChannelTypeTrx       = "trx"
 )
 
 // 支付交互方式常量
@@ -55,6 +55,29 @@ const (
 	PaymentInteractionRedirect = "redirect"
 	PaymentInteractionWAP      = "wap"
 	PaymentInteractionPage     = "page"
+)
+
+// 钱包交易类型常量
+const (
+	WalletTxnTypeRecharge    = "recharge"
+	WalletTxnTypeOrderPay    = "order_pay"
+	WalletTxnTypeOrderRefund = "order_refund"
+	WalletTxnTypeAdminAdjust = "admin_adjust"
+	WalletTxnTypeAdminRefund = "admin_refund"
+)
+
+// 钱包交易方向常量
+const (
+	WalletTxnDirectionIn  = "in"
+	WalletTxnDirectionOut = "out"
+)
+
+// 钱包充值状态常量
+const (
+	WalletRechargeStatusPending = "pending"
+	WalletRechargeStatusSuccess = "success"
+	WalletRechargeStatusFailed  = "failed"
+	WalletRechargeStatusExpired = "expired"
 )
 
 // 易支付回调常量

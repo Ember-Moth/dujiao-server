@@ -684,24 +684,31 @@ func (h *Handler) CreateGuestPayment(c *gin.Context) {
 		return
 	}
 	result, err := h.PaymentService.CreatePayment(service.CreatePaymentInput{
-		OrderID:   req.OrderID,
-		ChannelID: req.ChannelID,
-		ClientIP:  c.ClientIP(),
-		Context:   c.Request.Context(),
+		OrderID:    req.OrderID,
+		ChannelID:  req.ChannelID,
+		UseBalance: false,
+		ClientIP:   c.ClientIP(),
+		Context:    c.Request.Context(),
 	})
 	if err != nil {
 		respondPaymentCreateError(c, err)
 		return
 	}
-	response.Success(c, gin.H{
-		"payment_id":       result.Payment.ID,
-		"provider_type":    result.Payment.ProviderType,
-		"channel_type":     result.Payment.ChannelType,
-		"interaction_mode": result.Payment.InteractionMode,
-		"pay_url":          result.Payment.PayURL,
-		"qr_code":          result.Payment.QRCode,
-		"expires_at":       result.Payment.ExpiredAt,
-	})
+	resp := gin.H{
+		"order_paid":         result.OrderPaid,
+		"wallet_paid_amount": result.WalletPaidAmount,
+		"online_pay_amount":  result.OnlinePayAmount,
+	}
+	if result.Payment != nil {
+		resp["payment_id"] = result.Payment.ID
+		resp["provider_type"] = result.Payment.ProviderType
+		resp["channel_type"] = result.Payment.ChannelType
+		resp["interaction_mode"] = result.Payment.InteractionMode
+		resp["pay_url"] = result.Payment.PayURL
+		resp["qr_code"] = result.Payment.QRCode
+		resp["expires_at"] = result.Payment.ExpiredAt
+	}
+	response.Success(c, resp)
 }
 
 // CaptureGuestPaymentRequest 游客捕获支付请求。
