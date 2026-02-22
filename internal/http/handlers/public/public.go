@@ -26,24 +26,24 @@ const (
 // PublicProductView 公共商品响应结构
 type PublicProductView struct {
 	models.Product
-	PromotionID            *uint         `json:"promotion_id,omitempty"`
-	PromotionName          string        `json:"promotion_name,omitempty"`
-	PromotionType          string        `json:"promotion_type,omitempty"`
-	PromotionPriceAmount   *models.Money `json:"promotion_price_amount,omitempty"`
-	PromotionPriceCurrency string        `json:"promotion_price_currency,omitempty"`
-	ManualStockAvailable   int           `json:"manual_stock_available"`
-	AutoStockAvailable     int64         `json:"auto_stock_available"`
-	StockStatus            string        `json:"stock_status"`
-	IsSoldOut              bool          `json:"is_sold_out"`
+	PromotionID          *uint         `json:"promotion_id,omitempty"`
+	PromotionName        string        `json:"promotion_name,omitempty"`
+	PromotionType        string        `json:"promotion_type,omitempty"`
+	PromotionPriceAmount *models.Money `json:"promotion_price_amount,omitempty"`
+	ManualStockAvailable int           `json:"manual_stock_available"`
+	AutoStockAvailable   int64         `json:"auto_stock_available"`
+	StockStatus          string        `json:"stock_status"`
+	IsSoldOut            bool          `json:"is_sold_out"`
 }
 
 // GetConfig 获取全局配置
 func (h *Handler) GetConfig(c *gin.Context) {
 	// 默认配置
 	defaults := map[string]interface{}{
-		"languages": []string{"zh-CN", "zh-TW", "en-US"},
+		"languages":                        []string{"zh-CN", "zh-TW", "en-US"},
+		constants.SettingFieldSiteCurrency: constants.SiteCurrencyDefault,
 		"contact": map[string]interface{}{
-			"telegram": "https://t.me/dujiaostudio",
+			"telegram": "https://t.me/dujiaoka",
 			"whatsapp": "https://wa.me/1234567890",
 		},
 		"scripts": make([]interface{}, 0),
@@ -237,7 +237,6 @@ func (h *Handler) decoratePublicProduct(product *models.Product, promotionServic
 	item.PromotionName = strings.TrimSpace(promotion.Name)
 	item.PromotionType = strings.TrimSpace(promotion.Type)
 	item.PromotionPriceAmount = &discountedPrice
-	item.PromotionPriceCurrency = strings.TrimSpace(product.PriceCurrency)
 
 	return item, nil
 }

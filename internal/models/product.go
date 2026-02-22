@@ -16,7 +16,6 @@ type Product struct {
 	DescriptionJSON      JSON           `gorm:"type:json" json:"description"`                                       // 多语言描述
 	ContentJSON          JSON           `gorm:"type:json" json:"content"`                                           // 多语言详情（Markdown）
 	PriceAmount          Money          `gorm:"type:decimal(20,2);not null;default:0" json:"price_amount"`          // 价格金额
-	PriceCurrency        string         `gorm:"type:varchar(10);not null;default:''" json:"price_currency"`         // 价格币种
 	Images               StringArray    `gorm:"type:json" json:"images"`                                            // 图片数组
 	Tags                 StringArray    `gorm:"type:json" json:"tags"`                                              // 标签数组
 	PurchaseType         string         `gorm:"type:varchar(20);not null;default:'member'" json:"purchase_type"`    // 购买身份（guest/member）

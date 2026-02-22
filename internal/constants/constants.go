@@ -216,7 +216,13 @@ const (
 	SettingKeyCaptchaConfig          = "captcha_config"
 	SettingKeyTelegramAuthConfig     = "telegram_auth_config"
 	SettingKeyDashboardConfig        = "dashboard_config"
+	SettingFieldSiteCurrency         = "currency"
 	SettingFieldPaymentExpireMinutes = "payment_expire_minutes"
+)
+
+// 币种常量
+const (
+	SiteCurrencyDefault = "CNY"
 )
 
 // 卡密批次来源常量

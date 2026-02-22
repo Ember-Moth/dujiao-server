@@ -31,17 +31,19 @@ type UpsertCartItemInput struct {
 
 // CartService 购物车服务
 type CartService struct {
-	cartRepo      repository.CartRepository
-	productRepo   repository.ProductRepository
-	promotionRepo repository.PromotionRepository
+	cartRepo       repository.CartRepository
+	productRepo    repository.ProductRepository
+	promotionRepo  repository.PromotionRepository
+	settingService *SettingService
 }
 
 // NewCartService 创建购物车服务
-func NewCartService(cartRepo repository.CartRepository, productRepo repository.ProductRepository, promotionRepo repository.PromotionRepository) *CartService {
+func NewCartService(cartRepo repository.CartRepository, productRepo repository.ProductRepository, promotionRepo repository.PromotionRepository, settingService *SettingService) *CartService {
 	return &CartService{
-		cartRepo:      cartRepo,
-		productRepo:   productRepo,
-		promotionRepo: promotionRepo,
+		cartRepo:       cartRepo,
+		productRepo:    productRepo,
+		promotionRepo:  promotionRepo,
+		settingService: settingService,
 	}
 }
 
@@ -54,6 +56,7 @@ func (s *CartService) ListByUser(userID uint) ([]CartItemDetail, error) {
 	if err != nil {
 		return nil, err
 	}
+	currency := s.resolveSiteCurrency()
 	details := make([]CartItemDetail, 0, len(items))
 	promotionService := NewPromotionService(s.promotionRepo)
 	for _, item := range items {
@@ -90,7 +93,7 @@ func (s *CartService) ListByUser(userID uint) ([]CartItemDetail, error) {
 			FulfillmentType: fulfillmentType,
 			UnitPrice:       unitPrice,
 			OriginalPrice:   product.PriceAmount,
-			Currency:        product.PriceCurrency,
+			Currency:        currency,
 			Product:         product,
 		})
 	}
@@ -136,4 +139,15 @@ func (s *CartService) RemoveItem(userID, productID uint) error {
 		return ErrInvalidOrderItem
 	}
 	return s.cartRepo.DeleteByUserAndProduct(userID, productID)
+}
+
+func (s *CartService) resolveSiteCurrency() string {
+	if s == nil || s.settingService == nil {
+		return constants.SiteCurrencyDefault
+	}
+	currency, err := s.settingService.GetSiteCurrency(constants.SiteCurrencyDefault)
+	if err != nil {
+		return constants.SiteCurrencyDefault
+	}
+	return normalizeSiteCurrency(currency)
 }

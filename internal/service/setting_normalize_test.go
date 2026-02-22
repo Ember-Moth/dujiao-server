@@ -117,6 +117,7 @@ func TestUpdateSiteSettingNormalized(t *testing.T) {
 			"invalid",
 		},
 		"languages": []interface{}{" zh-CN ", "en-US", "", "en-US"},
+		"currency":  "usdx",
 	})
 	if err != nil {
 		t.Fatalf("update site config failed: %v", err)
@@ -234,6 +235,13 @@ func TestUpdateSiteSettingNormalized(t *testing.T) {
 	if len(languages) != 2 || languages[0] != "zh-CN" || languages[1] != "en-US" {
 		t.Fatalf("unexpected languages: %+v", languages)
 	}
+	currency, ok := result[constants.SettingFieldSiteCurrency].(string)
+	if !ok {
+		t.Fatalf("invalid currency payload type: %T", result[constants.SettingFieldSiteCurrency])
+	}
+	if currency != constants.SiteCurrencyDefault {
+		t.Fatalf("unexpected currency: %s", currency)
+	}
 
 	scripts, ok := result["scripts"].([]interface{})
 	if !ok {
@@ -288,6 +296,9 @@ func TestUpdateSiteSettingNormalizedDefaultAbout(t *testing.T) {
 	if len(scripts) != 0 {
 		t.Fatalf("unexpected default scripts payload: %+v", scripts)
 	}
+	if result[constants.SettingFieldSiteCurrency] != constants.SiteCurrencyDefault {
+		t.Fatalf("unexpected default currency: %v", result[constants.SettingFieldSiteCurrency])
+	}
 
 	about, ok := result["about"].(map[string]interface{})
 	if !ok {
@@ -316,6 +327,21 @@ func TestUpdateSiteSettingNormalizedDefaultAbout(t *testing.T) {
 	}
 	if len(serviceItems) != 0 {
 		t.Fatalf("unexpected default about.services.items size: %d", len(serviceItems))
+	}
+}
+
+func TestUpdateSiteSettingNormalizedCurrency(t *testing.T) {
+	repo := newMockSettingRepo()
+	svc := NewSettingService(repo)
+
+	result, err := svc.Update(constants.SettingKeySiteConfig, map[string]interface{}{
+		"currency": " usd ",
+	})
+	if err != nil {
+		t.Fatalf("update site config failed: %v", err)
+	}
+	if result[constants.SettingFieldSiteCurrency] != "USD" {
+		t.Fatalf("unexpected normalized currency: %v", result[constants.SettingFieldSiteCurrency])
 	}
 }
 

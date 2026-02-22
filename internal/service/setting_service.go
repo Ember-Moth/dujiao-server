@@ -91,6 +91,26 @@ func (s *SettingService) GetOrderPaymentExpireMinutes(defaultValue int) (int, er
 	return minutes, nil
 }
 
+// GetSiteCurrency 获取站点币种配置
+func (s *SettingService) GetSiteCurrency(defaultValue string) (string, error) {
+	fallback := normalizeSiteCurrency(defaultValue)
+	if s == nil {
+		return fallback, nil
+	}
+	value, err := s.GetByKey(constants.SettingKeySiteConfig)
+	if err != nil {
+		return fallback, err
+	}
+	if value == nil {
+		return fallback, nil
+	}
+	raw, ok := value[constants.SettingFieldSiteCurrency]
+	if !ok {
+		return fallback, nil
+	}
+	return normalizeSiteCurrency(raw), nil
+}
+
 func parseSettingInt(value interface{}) (int, error) {
 	switch v := value.(type) {
 	case int:

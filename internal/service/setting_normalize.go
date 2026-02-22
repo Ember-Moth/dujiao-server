@@ -1,6 +1,7 @@
 package service
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/dujiao-next/internal/config"
@@ -9,6 +10,7 @@ import (
 )
 
 var settingSupportedLanguages = []string{"zh-CN", "zh-TW", "en-US"}
+var settingCurrencyCodePattern = regexp.MustCompile(`^[A-Z]{3}$`)
 
 const (
 	settingSiteScriptsMaxCount       = 20
@@ -58,7 +60,7 @@ func normalizeOrderSetting(value map[string]interface{}) models.JSON {
 
 // normalizeSiteSetting 归一化站点配置结构。
 func normalizeSiteSetting(value map[string]interface{}) models.JSON {
-	normalized := make(models.JSON, len(value)+7)
+	normalized := make(models.JSON, len(value)+8)
 	for key, raw := range value {
 		normalized[key] = raw
 	}
@@ -69,6 +71,7 @@ func normalizeSiteSetting(value map[string]interface{}) models.JSON {
 	normalized["legal"] = normalizeSiteLocalizedBlock(value["legal"], []string{"terms", "privacy"})
 	normalized["about"] = normalizeSiteAbout(value["about"])
 	normalized["scripts"] = normalizeSiteScripts(value["scripts"])
+	normalized[constants.SettingFieldSiteCurrency] = normalizeSiteCurrency(value[constants.SettingFieldSiteCurrency])
 
 	if raw, ok := value["languages"]; ok {
 		normalized["languages"] = normalizeSiteLanguages(raw)
@@ -113,6 +116,14 @@ func normalizeSiteScripts(raw interface{}) []interface{} {
 	}
 
 	return result
+}
+
+func normalizeSiteCurrency(raw interface{}) string {
+	currency := strings.ToUpper(normalizeSettingText(raw))
+	if !settingCurrencyCodePattern.MatchString(currency) {
+		return constants.SiteCurrencyDefault
+	}
+	return currency
 }
 
 func normalizeSiteContact(raw interface{}) map[string]interface{} {

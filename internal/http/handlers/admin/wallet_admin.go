@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/dujiao-next/internal/constants"
 	"github.com/dujiao-next/internal/http/response"
 	"github.com/dujiao-next/internal/models"
 	"github.com/dujiao-next/internal/repository"
@@ -120,11 +121,18 @@ func (h *Handler) AdjustAdminUserWallet(c *gin.Context) {
 		respondError(c, response.CodeBadRequest, "error.bad_request", nil)
 		return
 	}
+	currency := strings.TrimSpace(req.Currency)
+	if currency == "" && h.SettingService != nil {
+		siteCurrency, currencyErr := h.SettingService.GetSiteCurrency(constants.SiteCurrencyDefault)
+		if currencyErr == nil {
+			currency = siteCurrency
+		}
+	}
 
 	account, txn, err := h.WalletService.AdminAdjustBalance(service.WalletAdjustInput{
 		UserID:   userID,
 		Delta:    models.NewMoneyFromDecimal(delta),
-		Currency: strings.TrimSpace(req.Currency),
+		Currency: currency,
 		Remark:   strings.TrimSpace(req.Remark),
 	})
 	if err != nil {

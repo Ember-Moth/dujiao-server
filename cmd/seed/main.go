@@ -105,9 +105,8 @@ func main() {
 				"zh-TW": "採用最新藍牙5.0技術，支持主動降噪，續航時間長達24小時。人體工學設計，佩戴舒適，適合長時間使用。",
 				"en-US": "Features the latest Bluetooth 5.0 technology, active noise cancellation, and up to 24 hours of battery life. Ergonomic design for comfortable extended wear.",
 			}),
-			PriceAmount:   models.NewMoneyFromDecimal(decimal.NewFromFloat(99.99)),
-			PriceCurrency: "USD",
-			CategoryID:    electronicsID,
+			PriceAmount: models.NewMoneyFromDecimal(decimal.NewFromFloat(99.99)),
+			CategoryID:  electronicsID,
 			Images: models.StringArray([]string{
 				"https://images.unsplash.com/photo-1590658268037-6bf12165a8df?w=800",
 			}),
@@ -131,9 +130,8 @@ func main() {
 				"zh-TW": "全天候心率監測，多種運動模式，防水設計，支持消息推送和通話功能。",
 				"en-US": "24/7 heart rate monitoring, multiple sport modes, waterproof design, supports message push and calling.",
 			}),
-			PriceAmount:   models.NewMoneyFromDecimal(decimal.NewFromFloat(199.99)),
-			PriceCurrency: "USD",
-			CategoryID:    electronicsID,
+			PriceAmount: models.NewMoneyFromDecimal(decimal.NewFromFloat(199.99)),
+			CategoryID:  electronicsID,
 			Images: models.StringArray([]string{
 				"https://images.unsplash.com/photo-1579586337278-3befd40fd17a?w=800",
 			}),
@@ -152,9 +150,8 @@ func main() {
 				"zh-TW": "大容量，快速充電，多設備兼容",
 				"en-US": "High capacity, fast charging, multi-device compatible",
 			}),
-			PriceAmount:   models.NewMoneyFromDecimal(decimal.NewFromFloat(49.99)),
-			PriceCurrency: "USD",
-			CategoryID:    accessoriesID,
+			PriceAmount: models.NewMoneyFromDecimal(decimal.NewFromFloat(49.99)),
+			CategoryID:  accessoriesID,
 			Images: models.StringArray([]string{
 				"https://images.unsplash.com/photo-1609091839311-d5365f9ff1c5?w=800",
 			}),
@@ -173,9 +170,8 @@ func main() {
 				"zh-TW": "大容量，防水防盜，USB充電接口",
 				"en-US": "Large capacity, waterproof and anti-theft, USB charging port",
 			}),
-			PriceAmount:   models.NewMoneyFromDecimal(decimal.NewFromFloat(79.99)),
-			PriceCurrency: "USD",
-			CategoryID:    lifestyleID,
+			PriceAmount: models.NewMoneyFromDecimal(decimal.NewFromFloat(79.99)),
+			CategoryID:  lifestyleID,
 			Images: models.StringArray([]string{
 				"https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=800",
 			}),
@@ -195,7 +191,6 @@ func main() {
 				"en-US": "For stock badge demo: manual fulfillment with unlimited stock.",
 			}),
 			PriceAmount:       models.NewMoneyFromDecimal(decimal.NewFromFloat(29.90)),
-			PriceCurrency:     "USD",
 			CategoryID:        accessoriesID,
 			PurchaseType:      constants.ProductPurchaseGuest,
 			FulfillmentType:   constants.FulfillmentTypeManual,
@@ -222,7 +217,6 @@ func main() {
 				"en-US": "For stock badge demo: manual fulfillment with low remaining stock.",
 			}),
 			PriceAmount:       models.NewMoneyFromDecimal(decimal.NewFromFloat(39.90)),
-			PriceCurrency:     "USD",
 			CategoryID:        accessoriesID,
 			PurchaseType:      constants.ProductPurchaseMember,
 			FulfillmentType:   constants.FulfillmentTypeManual,
@@ -249,7 +243,6 @@ func main() {
 				"en-US": "For stock badge and disabled purchase demo: manual fulfillment sold out.",
 			}),
 			PriceAmount:       models.NewMoneyFromDecimal(decimal.NewFromFloat(49.90)),
-			PriceCurrency:     "USD",
 			CategoryID:        lifestyleID,
 			PurchaseType:      constants.ProductPurchaseGuest,
 			FulfillmentType:   constants.FulfillmentTypeManual,
@@ -276,7 +269,6 @@ func main() {
 				"en-US": "For stock badge demo: auto fulfillment with sufficient card secrets.",
 			}),
 			PriceAmount:     models.NewMoneyFromDecimal(decimal.NewFromFloat(59.90)),
-			PriceCurrency:   "USD",
 			CategoryID:      electronicsID,
 			PurchaseType:    constants.ProductPurchaseMember,
 			FulfillmentType: constants.FulfillmentTypeAuto,
@@ -300,7 +292,6 @@ func main() {
 				"en-US": "For stock badge demo: auto fulfillment with low card secret stock.",
 			}),
 			PriceAmount:     models.NewMoneyFromDecimal(decimal.NewFromFloat(69.90)),
-			PriceCurrency:   "USD",
 			CategoryID:      electronicsID,
 			PurchaseType:    constants.ProductPurchaseGuest,
 			FulfillmentType: constants.FulfillmentTypeAuto,
@@ -324,7 +315,6 @@ func main() {
 				"en-US": "For stock badge and disabled purchase demo: auto fulfillment sold out.",
 			}),
 			PriceAmount:     models.NewMoneyFromDecimal(decimal.NewFromFloat(79.90)),
-			PriceCurrency:   "USD",
 			CategoryID:      electronicsID,
 			PurchaseType:    constants.ProductPurchaseMember,
 			FulfillmentType: constants.FulfillmentTypeAuto,
@@ -354,7 +344,6 @@ func main() {
 			existing.DescriptionJSON = prod.DescriptionJSON
 			existing.ContentJSON = prod.ContentJSON
 			existing.PriceAmount = prod.PriceAmount
-			existing.PriceCurrency = prod.PriceCurrency
 			existing.CategoryID = prod.CategoryID
 			existing.Images = prod.Images
 			existing.Tags = prod.Tags
@@ -697,6 +686,7 @@ func main() {
 
 	// 更新网站配置
 	configData := map[string]interface{}{
+		"currency": constants.SiteCurrencyDefault,
 		"contact": map[string]string{
 			"telegram": "https://t.me/dujiaostudio",
 			"whatsapp": "https://wa.me/1234567890",

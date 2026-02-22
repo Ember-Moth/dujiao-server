@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/dujiao-next/internal/constants"
 	"github.com/dujiao-next/internal/http/response"
 	"github.com/dujiao-next/internal/models"
 	"github.com/dujiao-next/internal/repository"
@@ -81,11 +82,18 @@ func (h *Handler) RechargeWallet(c *gin.Context) {
 		respondError(c, response.CodeBadRequest, "error.bad_request", err)
 		return
 	}
+	currency := strings.TrimSpace(req.Currency)
+	if currency == "" && h.SettingService != nil {
+		siteCurrency, currencyErr := h.SettingService.GetSiteCurrency(constants.SiteCurrencyDefault)
+		if currencyErr == nil {
+			currency = siteCurrency
+		}
+	}
 	result, err := h.PaymentService.CreateWalletRechargePayment(service.CreateWalletRechargePaymentInput{
 		UserID:    uid,
 		ChannelID: req.ChannelID,
 		Amount:    models.NewMoneyFromDecimal(amount),
-		Currency:  strings.TrimSpace(req.Currency),
+		Currency:  currency,
 		Remark:    strings.TrimSpace(req.Remark),
 		ClientIP:  c.ClientIP(),
 		Context:   c.Request.Context(),

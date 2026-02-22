@@ -248,6 +248,9 @@ func (s *PaymentService) CreatePayment(input CreatePaymentInput) (*CreatePayment
 		if channel == nil {
 			return ErrPaymentInvalid
 		}
+		if err := validatePaymentCurrencyForChannel(lockedOrder.Currency, channel); err != nil {
+			return err
+		}
 
 		feeAmount := decimal.Zero
 		if feeRate.GreaterThan(decimal.Zero) {
@@ -414,6 +417,9 @@ func (s *PaymentService) CreateWalletRechargePayment(input CreateWalletRechargeP
 	}
 	payableAmount := amount.Add(feeAmount).Round(2)
 	currency := normalizeWalletCurrency(input.Currency)
+	if err := validatePaymentCurrencyForChannel(currency, channel); err != nil {
+		return nil, err
+	}
 	if shouldUseCNYPaymentCurrency(channel) {
 		currency = "CNY"
 	}
@@ -2116,6 +2122,17 @@ func shouldUseCNYPaymentCurrency(channel *models.PaymentChannel) bool {
 	}
 	channelType := strings.ToLower(strings.TrimSpace(channel.ChannelType))
 	return channelType == constants.PaymentChannelTypeWechat || channelType == constants.PaymentChannelTypeAlipay
+}
+
+func validatePaymentCurrencyForChannel(currency string, channel *models.PaymentChannel) error {
+	normalized := strings.ToUpper(strings.TrimSpace(currency))
+	if !settingCurrencyCodePattern.MatchString(normalized) {
+		return ErrPaymentCurrencyMismatch
+	}
+	if shouldUseCNYPaymentCurrency(channel) && normalized != constants.SiteCurrencyDefault {
+		return ErrPaymentCurrencyMismatch
+	}
+	return nil
 }
 
 func normalizePaymentStatus(status string) string {

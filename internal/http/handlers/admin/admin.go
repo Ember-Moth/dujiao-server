@@ -215,7 +215,6 @@ type CreateProductRequest struct {
 	ContentJSON      map[string]interface{} `json:"content"`
 	ManualFormSchema map[string]interface{} `json:"manual_form_schema"`
 	PriceAmount      float64                `json:"price_amount" binding:"required"`
-	PriceCurrency    string                 `json:"price_currency" binding:"required"`
 	Images           []string               `json:"images"`
 	Tags             []string               `json:"tags"`
 	PurchaseType     string                 `json:"purchase_type"`
@@ -242,7 +241,6 @@ func (h *Handler) CreateProduct(c *gin.Context) {
 		ContentJSON:          req.ContentJSON,
 		ManualFormSchemaJSON: req.ManualFormSchema,
 		PriceAmount:          decimal.NewFromFloat(req.PriceAmount),
-		PriceCurrency:        req.PriceCurrency,
 		Images:               req.Images,
 		Tags:                 req.Tags,
 		PurchaseType:         req.PurchaseType,
@@ -302,7 +300,6 @@ func (h *Handler) UpdateProduct(c *gin.Context) {
 		ContentJSON:          req.ContentJSON,
 		ManualFormSchemaJSON: req.ManualFormSchema,
 		PriceAmount:          decimal.NewFromFloat(req.PriceAmount),
-		PriceCurrency:        req.PriceCurrency,
 		Images:               req.Images,
 		Tags:                 req.Tags,
 		PurchaseType:         req.PurchaseType,

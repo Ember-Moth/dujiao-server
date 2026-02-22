@@ -875,6 +875,8 @@ func respondPaymentCreateError(c *gin.Context, err error) {
 		respondError(c, response.CodeBadRequest, "error.payment_gateway_request_failed", nil)
 	case errors.Is(err, service.ErrPaymentGatewayResponseInvalid):
 		respondError(c, response.CodeBadRequest, "error.payment_gateway_response_invalid", nil)
+	case errors.Is(err, service.ErrPaymentCurrencyMismatch):
+		respondError(c, response.CodeBadRequest, "error.payment_currency_mismatch", nil)
 	case errors.Is(err, service.ErrWalletNotSupportedForGuest):
 		respondError(c, response.CodeBadRequest, "error.payment_invalid", nil)
 	default:

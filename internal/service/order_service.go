@@ -467,7 +467,7 @@ func (s *OrderService) buildOrderResult(input orderCreateParams) (*orderBuildRes
 	var orderItems []models.OrderItem
 	originalAmount := decimal.Zero
 	promotionDiscountAmount := decimal.Zero
-	var currency string
+	currency := s.resolveSiteCurrency()
 	now := time.Now()
 	var promotionIDValue uint
 	var promotionSeen bool
@@ -497,7 +497,7 @@ func (s *OrderService) buildOrderResult(input orderCreateParams) (*orderBuildRes
 		if input.IsGuest && purchaseType == constants.ProductPurchaseMember {
 			return nil, ErrProductPurchaseNotAllowed
 		}
-		productCurrency := strings.TrimSpace(product.PriceCurrency)
+		productCurrency := currency
 		promotion, unitPrice, err := promotionService.ApplyPromotion(product, item.Quantity)
 		if err != nil {
 			return nil, err
@@ -514,12 +514,6 @@ func (s *OrderService) buildOrderResult(input orderCreateParams) (*orderBuildRes
 				Mul(decimal.NewFromInt(int64(item.Quantity))).
 				Round(2)
 			promotionDiscountAmount = promotionDiscountAmount.Add(promotionDiscount).Round(2)
-		}
-
-		if currency == "" {
-			currency = productCurrency
-		} else if currency != productCurrency {
-			return nil, ErrOrderCurrencyMismatch
 		}
 
 		total := unitPriceAmount.Mul(decimal.NewFromInt(int64(item.Quantity))).Round(2)
@@ -673,6 +667,17 @@ func (s *OrderService) resolveExpireMinutes() int {
 		return defaultMinutes
 	}
 	return minutes
+}
+
+func (s *OrderService) resolveSiteCurrency() string {
+	if s == nil || s.settingService == nil {
+		return constants.SiteCurrencyDefault
+	}
+	currency, err := s.settingService.GetSiteCurrency(constants.SiteCurrencyDefault)
+	if err != nil {
+		return constants.SiteCurrencyDefault
+	}
+	return normalizeSiteCurrency(currency)
 }
 
 // cancelOrderWithChildren 取消父订单并级联子订单

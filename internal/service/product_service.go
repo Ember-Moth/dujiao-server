@@ -17,7 +17,9 @@ type ProductService struct {
 
 // NewProductService 创建商品服务
 func NewProductService(repo repository.ProductRepository) *ProductService {
-	return &ProductService{repo: repo}
+	return &ProductService{
+		repo: repo,
+	}
 }
 
 // CreateProductInput 创建/更新商品输入
@@ -30,7 +32,6 @@ type CreateProductInput struct {
 	ContentJSON          map[string]interface{}
 	ManualFormSchemaJSON map[string]interface{}
 	PriceAmount          decimal.Decimal
-	PriceCurrency        string
 	Images               []string
 	Tags                 []string
 	PurchaseType         string
@@ -93,9 +94,8 @@ func (s *ProductService) GetAdminByID(id string) (*models.Product, error) {
 
 // Create 创建商品
 func (s *ProductService) Create(input CreateProductInput) (*models.Product, error) {
-	currency := strings.TrimSpace(input.PriceCurrency)
 	priceAmount := input.PriceAmount.Round(2)
-	if priceAmount.LessThanOrEqual(decimal.Zero) || currency == "" {
+	if priceAmount.LessThanOrEqual(decimal.Zero) {
 		return nil, ErrProductPriceInvalid
 	}
 	count, err := s.repo.CountBySlug(input.Slug, nil)
@@ -136,7 +136,6 @@ func (s *ProductService) Create(input CreateProductInput) (*models.Product, erro
 		ContentJSON:          models.JSON(input.ContentJSON),
 		ManualFormSchemaJSON: models.JSON{},
 		PriceAmount:          models.NewMoneyFromDecimal(priceAmount),
-		PriceCurrency:        currency,
 		Images:               models.StringArray(input.Images),
 		Tags:                 models.StringArray(input.Tags),
 		PurchaseType:         purchaseType,
@@ -163,9 +162,8 @@ func (s *ProductService) Create(input CreateProductInput) (*models.Product, erro
 
 // Update 更新商品
 func (s *ProductService) Update(id string, input CreateProductInput) (*models.Product, error) {
-	currency := strings.TrimSpace(input.PriceCurrency)
 	priceAmount := input.PriceAmount.Round(2)
-	if priceAmount.LessThanOrEqual(decimal.Zero) || currency == "" {
+	if priceAmount.LessThanOrEqual(decimal.Zero) {
 		return nil, ErrProductPriceInvalid
 	}
 	product, err := s.repo.GetByID(id)
@@ -192,7 +190,6 @@ func (s *ProductService) Update(id string, input CreateProductInput) (*models.Pr
 	product.ContentJSON = models.JSON(input.ContentJSON)
 	product.ManualFormSchemaJSON = models.JSON{}
 	product.PriceAmount = models.NewMoneyFromDecimal(priceAmount)
-	product.PriceCurrency = currency
 	product.SortOrder = input.SortOrder
 	product.Images = models.StringArray(input.Images)
 	product.Tags = models.StringArray(input.Tags)

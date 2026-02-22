@@ -169,7 +169,7 @@ func (c *Container) initServices() {
 	c.ProductService = service.NewProductService(c.ProductRepo)
 	c.PostService = service.NewPostService(c.PostRepo)
 	c.CategoryService = service.NewCategoryService(c.CategoryRepo)
-	c.CartService = service.NewCartService(c.CartRepo, c.ProductRepo, c.PromotionRepo)
+	c.CartService = service.NewCartService(c.CartRepo, c.ProductRepo, c.PromotionRepo, c.SettingService)
 	c.WalletService = service.NewWalletService(c.WalletRepo, c.OrderRepo, c.UserRepo)
 	c.OrderService = service.NewOrderService(c.OrderRepo, c.ProductRepo, c.CardSecretRepo, c.CouponRepo, c.CouponUsageRepo, c.PromotionRepo, c.QueueClient, c.SettingService, c.WalletService, c.Config.Order.PaymentExpireMinutes)
 	c.FulfillmentService = service.NewFulfillmentService(c.OrderRepo, c.FulfillmentRepo, c.CardSecretRepo, c.QueueClient)

@@ -44,7 +44,6 @@ func TestGetTopProductsIncludesChildOrderItems(t *testing.T) {
 		Slug:            "test-dashboard-product",
 		TitleJSON:       models.JSON{"zh-CN": "测试商品"},
 		PriceAmount:     models.NewMoneyFromDecimal(decimal.NewFromInt(100)),
-		PriceCurrency:   "CNY",
 		PurchaseType:    constants.ProductPurchaseMember,
 		FulfillmentType: constants.FulfillmentTypeManual,
 		IsActive:        true,

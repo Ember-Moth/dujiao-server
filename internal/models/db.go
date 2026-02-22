@@ -71,7 +71,7 @@ func applyDBPool(sqlDB *sql.DB, pool DBPoolConfig) {
 
 // AutoMigrate 自动迁移所有数据库表
 func AutoMigrate() error {
-	return DB.AutoMigrate(
+	if err := DB.AutoMigrate(
 		&Admin{},
 		&User{},
 		&UserOAuthIdentity{},
@@ -97,5 +97,15 @@ func AutoMigrate() error {
 		&Post{},
 		&Banner{},
 		&Setting{},
-	)
+	); err != nil {
+		return err
+	}
+
+	// 移除历史遗留商品币种列，统一由站点配置提供币种。
+	if DB.Migrator().HasColumn(&Product{}, "price_currency") {
+		if err := DB.Migrator().DropColumn(&Product{}, "price_currency"); err != nil {
+			return err
+		}
+	}
+	return nil
 }

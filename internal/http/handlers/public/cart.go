@@ -24,7 +24,6 @@ type CartProduct struct {
 	Slug            string             `json:"slug"`
 	Title           models.JSON        `json:"title"`
 	PriceAmount     models.Money       `json:"price_amount"`
-	PriceCurrency   string             `json:"price_currency"`
 	Images          models.StringArray `json:"images"`
 	Tags            models.StringArray `json:"tags"`
 	PurchaseType    string             `json:"purchase_type"`
@@ -77,7 +76,6 @@ func (h *Handler) GetCart(c *gin.Context) {
 			Slug:            item.Product.Slug,
 			Title:           item.Product.TitleJSON,
 			PriceAmount:     item.Product.PriceAmount,
-			PriceCurrency:   item.Product.PriceCurrency,
 			Images:          item.Product.Images,
 			Tags:            item.Product.Tags,
 			PurchaseType:    item.Product.PurchaseType,
