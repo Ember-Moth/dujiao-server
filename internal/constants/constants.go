@@ -142,6 +142,11 @@ const (
 	UserStatusDisabled = "disabled"
 )
 
+// 第三方登录提供方常量
+const (
+	UserOAuthProviderTelegram = "telegram"
+)
+
 // 登录日志状态常量
 const (
 	LoginLogStatusSuccess = "success"
@@ -159,12 +164,17 @@ const (
 	LoginLogFailReasonInvalidCredentials   = "invalid_credentials"
 	LoginLogFailReasonEmailNotVerified     = "email_not_verified"
 	LoginLogFailReasonUserDisabled         = "user_disabled"
+	LoginLogFailReasonTelegramInvalid      = "telegram_invalid"
+	LoginLogFailReasonTelegramExpired      = "telegram_expired"
+	LoginLogFailReasonTelegramReplayed     = "telegram_replayed"
+	LoginLogFailReasonTelegramConfig       = "telegram_config_invalid"
 	LoginLogFailReasonInternalError        = "internal_error"
 )
 
 // 登录日志来源常量
 const (
-	LoginLogSourceWeb = "web"
+	LoginLogSourceWeb      = "web"
+	LoginLogSourceTelegram = "telegram"
 )
 
 // 验证码用途常量
@@ -204,6 +214,7 @@ const (
 	SettingKeyOrderConfig            = "order_config"
 	SettingKeySMTPConfig             = "smtp_config"
 	SettingKeyCaptchaConfig          = "captcha_config"
+	SettingKeyTelegramAuthConfig     = "telegram_auth_config"
 	SettingKeyDashboardConfig        = "dashboard_config"
 	SettingFieldPaymentExpireMinutes = "payment_expire_minutes"
 )

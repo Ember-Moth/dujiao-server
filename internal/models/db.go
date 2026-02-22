@@ -74,6 +74,7 @@ func AutoMigrate() error {
 	return DB.AutoMigrate(
 		&Admin{},
 		&User{},
+		&UserOAuthIdentity{},
 		&WalletAccount{},
 		&WalletTransaction{},
 		&WalletRechargeOrder{},

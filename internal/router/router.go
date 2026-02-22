@@ -92,6 +92,7 @@ func SetupRouter(cfg *config.Config, c *provider.Container) *gin.Engine {
 			auth.POST("/send-verify-code", publicHandler.SendUserVerifyCode)
 			auth.POST("/register", publicHandler.UserRegister)
 			auth.POST("/login", RateLimitMiddleware(redisClient, loginRule, KeyByIPAndJSONField("email")), publicHandler.UserLogin)
+			auth.POST("/telegram/login", RateLimitMiddleware(redisClient, loginRule, KeyByIP), publicHandler.UserTelegramLogin)
 			auth.POST("/forgot-password", publicHandler.UserForgotPassword)
 		}
 
@@ -103,6 +104,9 @@ func SetupRouter(cfg *config.Config, c *provider.Container) *gin.Engine {
 			user.GET("/me/login-logs", publicHandler.GetMyLoginLogs)
 			user.PUT("/me/profile", publicHandler.UpdateUserProfile)
 			user.PUT("/me/password", publicHandler.ChangeUserPassword)
+			user.GET("/me/telegram", publicHandler.GetMyTelegramBinding)
+			user.POST("/me/telegram/bind", publicHandler.BindMyTelegram)
+			user.DELETE("/me/telegram/unbind", publicHandler.UnbindMyTelegram)
 			user.POST("/me/email/send-verify-code", publicHandler.SendChangeEmailCode)
 			user.POST("/me/email/change", publicHandler.ChangeEmail)
 			user.GET("/cart", publicHandler.GetCart)
@@ -177,6 +181,8 @@ func SetupRouter(cfg *config.Config, c *provider.Container) *gin.Engine {
 				authorized.POST("/settings/smtp/test", adminHandler.TestSMTPSettings)
 				authorized.GET("/settings/captcha", adminHandler.GetCaptchaSettings)
 				authorized.PUT("/settings/captcha", adminHandler.UpdateCaptchaSettings)
+				authorized.GET("/settings/telegram-auth", adminHandler.GetTelegramAuthSettings)
+				authorized.PUT("/settings/telegram-auth", adminHandler.UpdateTelegramAuthSettings)
 				authorized.PUT("/password", adminHandler.UpdateAdminPassword) // 修改密码
 
 				// 权限管理

@@ -348,3 +348,32 @@ func TestUpdateSiteSettingNormalizedScriptsLimit(t *testing.T) {
 		t.Fatalf("unexpected scripts size: %d", len(normalizedScripts))
 	}
 }
+
+func TestUpdateTelegramAuthSettingNormalized(t *testing.T) {
+	repo := newMockSettingRepo()
+	svc := NewSettingService(repo)
+
+	result, err := svc.Update(constants.SettingKeyTelegramAuthConfig, map[string]interface{}{
+		"enabled":              true,
+		"bot_username":         " @demo_bot ",
+		"bot_token":            " token-abc ",
+		"login_expire_seconds": -10,
+		"replay_ttl_seconds":   1,
+	})
+	if err != nil {
+		t.Fatalf("update telegram auth config failed: %v", err)
+	}
+
+	if result["bot_username"] != "demo_bot" {
+		t.Fatalf("unexpected bot_username: %v", result["bot_username"])
+	}
+	if result["bot_token"] != "token-abc" {
+		t.Fatalf("unexpected bot_token: %v", result["bot_token"])
+	}
+	if result["login_expire_seconds"] != 300 {
+		t.Fatalf("unexpected login_expire_seconds: %v", result["login_expire_seconds"])
+	}
+	if result["replay_ttl_seconds"] != 60 {
+		t.Fatalf("unexpected replay_ttl_seconds: %v", result["replay_ttl_seconds"])
+	}
+}

@@ -22,19 +22,30 @@ import (
 
 // UserAuthService 用户认证服务
 type UserAuthService struct {
-	cfg          *config.Config
-	userRepo     repository.UserRepository
-	codeRepo     repository.EmailVerifyCodeRepository
-	emailService *EmailService
+	cfg                   *config.Config
+	userRepo              repository.UserRepository
+	userOAuthIdentityRepo repository.UserOAuthIdentityRepository
+	codeRepo              repository.EmailVerifyCodeRepository
+	emailService          *EmailService
+	telegramAuthService   *TelegramAuthService
 }
 
 // NewUserAuthService 创建用户认证服务
-func NewUserAuthService(cfg *config.Config, userRepo repository.UserRepository, codeRepo repository.EmailVerifyCodeRepository, emailService *EmailService) *UserAuthService {
+func NewUserAuthService(
+	cfg *config.Config,
+	userRepo repository.UserRepository,
+	userOAuthIdentityRepo repository.UserOAuthIdentityRepository,
+	codeRepo repository.EmailVerifyCodeRepository,
+	emailService *EmailService,
+	telegramAuthService *TelegramAuthService,
+) *UserAuthService {
 	return &UserAuthService{
-		cfg:          cfg,
-		userRepo:     userRepo,
-		codeRepo:     codeRepo,
-		emailService: emailService,
+		cfg:                   cfg,
+		userRepo:              userRepo,
+		userOAuthIdentityRepo: userOAuthIdentityRepo,
+		codeRepo:              codeRepo,
+		emailService:          emailService,
+		telegramAuthService:   telegramAuthService,
 	}
 }
 
@@ -45,6 +56,19 @@ type UserJWTClaims struct {
 	TokenVersion uint64 `json:"token_version"`
 	jwt.RegisteredClaims
 }
+
+const (
+	// EmailChangeModeBindOnly 表示仅需校验新邮箱验证码（用于 Telegram 虚拟邮箱账号）
+	EmailChangeModeBindOnly = "bind_only"
+	// EmailChangeModeChangeWithOldAndNew 表示需要旧邮箱 + 新邮箱双验证码
+	EmailChangeModeChangeWithOldAndNew = "change_with_old_and_new"
+	// PasswordChangeModeSetWithoutOld 表示首次设置密码，不需要旧密码
+	PasswordChangeModeSetWithoutOld = "set_without_old"
+	// PasswordChangeModeChangeWithOld 表示修改密码，需要旧密码
+	PasswordChangeModeChangeWithOld = "change_with_old"
+	telegramPlaceholderEmailPrefix  = "telegram_"
+	telegramPlaceholderEmailDomain  = "@login.local"
+)
 
 // GenerateUserJWT 生成用户 JWT Token
 func (s *UserAuthService) GenerateUserJWT(user *models.User, expireHours int) (string, time.Time, error) {
@@ -234,6 +258,198 @@ func (s *UserAuthService) LoginWithRememberMe(email, password string, rememberMe
 	return user, token, expiresAt, nil
 }
 
+// LoginWithTelegramInput Telegram 登录输入
+type LoginWithTelegramInput struct {
+	Payload TelegramLoginPayload
+	Context context.Context
+}
+
+// BindTelegramInput 绑定 Telegram 输入
+type BindTelegramInput struct {
+	UserID  uint
+	Payload TelegramLoginPayload
+	Context context.Context
+}
+
+// LoginWithTelegram Telegram 登录
+func (s *UserAuthService) LoginWithTelegram(input LoginWithTelegramInput) (*models.User, string, time.Time, error) {
+	if s.telegramAuthService == nil || s.userOAuthIdentityRepo == nil {
+		return nil, "", time.Time{}, ErrTelegramAuthConfigInvalid
+	}
+	ctx := input.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	verified, err := s.telegramAuthService.VerifyLogin(ctx, input.Payload)
+	if err != nil {
+		return nil, "", time.Time{}, err
+	}
+
+	identity, err := s.userOAuthIdentityRepo.GetByProviderUserID(verified.Provider, verified.ProviderUserID)
+	if err != nil {
+		return nil, "", time.Time{}, err
+	}
+
+	var user *models.User
+	if identity != nil {
+		user, err = s.getActiveUserByID(identity.UserID)
+		if err != nil {
+			return nil, "", time.Time{}, err
+		}
+		identityChanged := applyTelegramIdentity(verified, identity)
+		if identityChanged {
+			identity.UpdatedAt = time.Now()
+			if err := s.userOAuthIdentityRepo.Update(identity); err != nil {
+				return nil, "", time.Time{}, err
+			}
+		}
+	} else {
+		user, err = s.findOrCreateTelegramUser(verified)
+		if err != nil {
+			return nil, "", time.Time{}, err
+		}
+		identity = &models.UserOAuthIdentity{
+			UserID:         user.ID,
+			Provider:       verified.Provider,
+			ProviderUserID: verified.ProviderUserID,
+			Username:       verified.Username,
+			AvatarURL:      verified.AvatarURL,
+			AuthAt:         &verified.AuthAt,
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
+		}
+		if err := s.userOAuthIdentityRepo.Create(identity); err != nil {
+			existing, getErr := s.userOAuthIdentityRepo.GetByProviderUserID(verified.Provider, verified.ProviderUserID)
+			if getErr != nil {
+				return nil, "", time.Time{}, err
+			}
+			if existing == nil {
+				return nil, "", time.Time{}, err
+			}
+			identity = existing
+			user, err = s.getActiveUserByID(existing.UserID)
+			if err != nil {
+				return nil, "", time.Time{}, err
+			}
+		}
+	}
+
+	token, expiresAt, err := s.GenerateUserJWT(user, 0)
+	if err != nil {
+		return nil, "", time.Time{}, err
+	}
+
+	now := time.Now()
+	user.LastLoginAt = &now
+	user.UpdatedAt = now
+	if err := s.userRepo.Update(user); err != nil {
+		return nil, "", time.Time{}, err
+	}
+	_ = cache.SetUserAuthState(context.Background(), cache.BuildUserAuthState(user))
+	return user, token, expiresAt, nil
+}
+
+// BindTelegram 绑定 Telegram
+func (s *UserAuthService) BindTelegram(input BindTelegramInput) (*models.UserOAuthIdentity, error) {
+	if input.UserID == 0 {
+		return nil, ErrNotFound
+	}
+	if s.telegramAuthService == nil || s.userOAuthIdentityRepo == nil {
+		return nil, ErrTelegramAuthConfigInvalid
+	}
+	ctx := input.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	verified, err := s.telegramAuthService.VerifyLogin(ctx, input.Payload)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.getActiveUserByID(input.UserID); err != nil {
+		return nil, err
+	}
+
+	occupied, err := s.userOAuthIdentityRepo.GetByProviderUserID(verified.Provider, verified.ProviderUserID)
+	if err != nil {
+		return nil, err
+	}
+	if occupied != nil && occupied.UserID != input.UserID {
+		return nil, ErrUserOAuthIdentityExists
+	}
+
+	current, err := s.userOAuthIdentityRepo.GetByUserProvider(input.UserID, verified.Provider)
+	if err != nil {
+		return nil, err
+	}
+	if current != nil && current.ProviderUserID != verified.ProviderUserID {
+		return nil, ErrUserOAuthAlreadyBound
+	}
+	if current == nil {
+		current = &models.UserOAuthIdentity{
+			UserID:         input.UserID,
+			Provider:       verified.Provider,
+			ProviderUserID: verified.ProviderUserID,
+			Username:       verified.Username,
+			AvatarURL:      verified.AvatarURL,
+			AuthAt:         &verified.AuthAt,
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
+		}
+		if err := s.userOAuthIdentityRepo.Create(current); err != nil {
+			return nil, err
+		}
+		return current, nil
+	}
+
+	if applyTelegramIdentity(verified, current) {
+		current.UpdatedAt = time.Now()
+		if err := s.userOAuthIdentityRepo.Update(current); err != nil {
+			return nil, err
+		}
+	}
+	return current, nil
+}
+
+// UnbindTelegram 解绑 Telegram
+func (s *UserAuthService) UnbindTelegram(userID uint) error {
+	if userID == 0 {
+		return ErrNotFound
+	}
+	if s.userOAuthIdentityRepo == nil {
+		return ErrTelegramAuthConfigInvalid
+	}
+	user, err := s.getActiveUserByID(userID)
+	if err != nil {
+		return err
+	}
+	mode, err := s.ResolveEmailChangeMode(user)
+	if err != nil {
+		return err
+	}
+	if mode == EmailChangeModeBindOnly {
+		return ErrTelegramUnbindRequiresEmail
+	}
+	identity, err := s.userOAuthIdentityRepo.GetByUserProvider(userID, constants.UserOAuthProviderTelegram)
+	if err != nil {
+		return err
+	}
+	if identity == nil {
+		return ErrUserOAuthNotBound
+	}
+	return s.userOAuthIdentityRepo.DeleteByID(identity.ID)
+}
+
+// GetTelegramBinding 获取 Telegram 绑定
+func (s *UserAuthService) GetTelegramBinding(userID uint) (*models.UserOAuthIdentity, error) {
+	if userID == 0 {
+		return nil, ErrNotFound
+	}
+	if s.userOAuthIdentityRepo == nil {
+		return nil, ErrTelegramAuthConfigInvalid
+	}
+	return s.userOAuthIdentityRepo.GetByUserProvider(userID, constants.UserOAuthProviderTelegram)
+}
+
 // ResetPassword 重置密码
 func (s *UserAuthService) ResetPassword(email, code, newPassword string) error {
 	normalized, err := normalizeEmail(email)
@@ -260,6 +476,7 @@ func (s *UserAuthService) ResetPassword(email, code, newPassword string) error {
 		return err
 	}
 	user.PasswordHash = string(hashedPassword)
+	user.PasswordSetupRequired = false
 	now := time.Now()
 	user.UpdatedAt = now
 	user.TokenVersion++
@@ -284,9 +501,14 @@ func (s *UserAuthService) ChangePassword(userID uint, oldPassword, newPassword s
 	if user == nil {
 		return ErrNotFound
 	}
-
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(oldPassword)); err != nil {
-		return ErrInvalidPassword
+	mode, err := s.ResolvePasswordChangeMode(user)
+	if err != nil {
+		return err
+	}
+	if mode == PasswordChangeModeChangeWithOld {
+		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(oldPassword)); err != nil {
+			return ErrInvalidPassword
+		}
 	}
 
 	if err := validatePassword(s.cfg.Security.PasswordPolicy, newPassword); err != nil {
@@ -299,6 +521,7 @@ func (s *UserAuthService) ChangePassword(userID uint, oldPassword, newPassword s
 	}
 
 	user.PasswordHash = string(hashedPassword)
+	user.PasswordSetupRequired = false
 	now := time.Now()
 	user.UpdatedAt = now
 	user.TokenVersion++
@@ -368,9 +591,16 @@ func (s *UserAuthService) SendChangeEmailCode(userID uint, kind, newEmail, local
 	if strings.TrimSpace(user.Locale) != "" {
 		locale = user.Locale
 	}
+	mode, err := s.ResolveEmailChangeMode(user)
+	if err != nil {
+		return err
+	}
 
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "old":
+		if mode == EmailChangeModeBindOnly {
+			return ErrEmailChangeInvalid
+		}
 		return s.sendVerifyCode(user.Email, constants.VerifyPurposeChangeEmailOld, locale)
 	case "new":
 		normalized, err := normalizeEmail(newEmail)
@@ -405,6 +635,10 @@ func (s *UserAuthService) ChangeEmail(userID uint, newEmail, oldCode, newCode st
 	if user == nil {
 		return nil, ErrNotFound
 	}
+	mode, err := s.ResolveEmailChangeMode(user)
+	if err != nil {
+		return nil, err
+	}
 
 	normalized, err := normalizeEmail(newEmail)
 	if err != nil {
@@ -421,8 +655,10 @@ func (s *UserAuthService) ChangeEmail(userID uint, newEmail, oldCode, newCode st
 		return nil, ErrEmailChangeExists
 	}
 
-	if _, err := s.verifyCode(user.Email, constants.VerifyPurposeChangeEmailOld, oldCode); err != nil {
-		return nil, err
+	if mode != EmailChangeModeBindOnly {
+		if _, err := s.verifyCode(user.Email, constants.VerifyPurposeChangeEmailOld, oldCode); err != nil {
+			return nil, err
+		}
 	}
 	if _, err := s.verifyCode(normalized, constants.VerifyPurposeChangeEmailNew, newCode); err != nil {
 		return nil, err
@@ -443,7 +679,62 @@ func (s *UserAuthService) GetUserByID(id uint) (*models.User, error) {
 	if id == 0 {
 		return nil, ErrNotFound
 	}
-	return s.userRepo.GetByID(id)
+	user, err := s.userRepo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureTelegramVirtualEmailState(user); err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+// ResolveEmailChangeMode 返回当前用户邮箱修改模式
+func (s *UserAuthService) ResolveEmailChangeMode(user *models.User) (string, error) {
+	if user == nil {
+		return EmailChangeModeChangeWithOldAndNew, nil
+	}
+	if err := s.ensureTelegramVirtualEmailState(user); err != nil {
+		return "", err
+	}
+	if isTelegramPlaceholderEmail(user.Email) {
+		return EmailChangeModeBindOnly, nil
+	}
+	return EmailChangeModeChangeWithOldAndNew, nil
+}
+
+// ResolvePasswordChangeMode 返回当前用户密码修改模式
+func (s *UserAuthService) ResolvePasswordChangeMode(user *models.User) (string, error) {
+	if user == nil {
+		return PasswordChangeModeChangeWithOld, nil
+	}
+	if err := s.ensureTelegramVirtualEmailState(user); err != nil {
+		return "", err
+	}
+	if user.PasswordSetupRequired {
+		return PasswordChangeModeSetWithoutOld, nil
+	}
+	return PasswordChangeModeChangeWithOld, nil
+}
+
+func (s *UserAuthService) ensureTelegramVirtualEmailState(user *models.User) error {
+	if user == nil || !isTelegramPlaceholderEmail(user.Email) {
+		return nil
+	}
+	updated := false
+	if user.EmailVerifiedAt != nil {
+		user.EmailVerifiedAt = nil
+		updated = true
+	}
+	if !user.PasswordSetupRequired {
+		user.PasswordSetupRequired = true
+		updated = true
+	}
+	if !updated {
+		return nil
+	}
+	user.UpdatedAt = time.Now()
+	return s.userRepo.Update(user)
 }
 
 func (s *UserAuthService) verifyCode(email, purpose, code string) (*models.EmailVerifyCode, error) {
@@ -514,6 +805,126 @@ func (s *UserAuthService) sendVerifyCode(email, purpose, locale string) error {
 	}
 
 	return nil
+}
+
+func (s *UserAuthService) getActiveUserByID(userID uint) (*models.User, error) {
+	user, err := s.userRepo.GetByID(userID)
+	if err != nil {
+		return nil, err
+	}
+	if user == nil {
+		return nil, ErrNotFound
+	}
+	if strings.ToLower(strings.TrimSpace(user.Status)) != constants.UserStatusActive {
+		return nil, ErrUserDisabled
+	}
+	return user, nil
+}
+
+func (s *UserAuthService) findOrCreateTelegramUser(verified *TelegramIdentityVerified) (*models.User, error) {
+	if verified == nil {
+		return nil, ErrTelegramAuthPayloadInvalid
+	}
+	email := buildTelegramPlaceholderEmail(verified.ProviderUserID)
+	user, err := s.userRepo.GetByEmail(email)
+	if err != nil {
+		return nil, err
+	}
+	if user != nil {
+		if strings.ToLower(strings.TrimSpace(user.Status)) != constants.UserStatusActive {
+			return nil, ErrUserDisabled
+		}
+		return user, nil
+	}
+
+	randomSuffix, err := randomNumericCode(16)
+	if err != nil {
+		return nil, err
+	}
+	passwordSeed := fmt.Sprintf("tg_%s_%s", verified.ProviderUserID, randomSuffix)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(passwordSeed), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	user = &models.User{
+		Email:                 email,
+		PasswordHash:          string(hashedPassword),
+		PasswordSetupRequired: true,
+		DisplayName:           resolveTelegramDisplayName(verified),
+		Status:                constants.UserStatusActive,
+		LastLoginAt:           &now,
+		CreatedAt:             now,
+		UpdatedAt:             now,
+	}
+	if err := s.userRepo.Create(user); err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+func applyTelegramIdentity(verified *TelegramIdentityVerified, identity *models.UserOAuthIdentity) bool {
+	if verified == nil || identity == nil {
+		return false
+	}
+	changed := false
+	if identity.Provider == "" {
+		identity.Provider = verified.Provider
+		changed = true
+	}
+	if identity.ProviderUserID == "" {
+		identity.ProviderUserID = verified.ProviderUserID
+		changed = true
+	}
+	if identity.Username != verified.Username {
+		identity.Username = verified.Username
+		changed = true
+	}
+	if identity.AvatarURL != verified.AvatarURL {
+		identity.AvatarURL = verified.AvatarURL
+		changed = true
+	}
+	if identity.AuthAt == nil || !identity.AuthAt.Equal(verified.AuthAt) {
+		authAt := verified.AuthAt
+		identity.AuthAt = &authAt
+		changed = true
+	}
+	return changed
+}
+
+func buildTelegramPlaceholderEmail(providerUserID string) string {
+	normalizedID := strings.TrimSpace(providerUserID)
+	if normalizedID == "" {
+		normalizedID = "unknown"
+	}
+	return fmt.Sprintf("%s%s%s", telegramPlaceholderEmailPrefix, normalizedID, telegramPlaceholderEmailDomain)
+}
+
+func isTelegramPlaceholderEmail(email string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	if normalized == "" {
+		return false
+	}
+	return strings.HasPrefix(normalized, telegramPlaceholderEmailPrefix) &&
+		strings.HasSuffix(normalized, telegramPlaceholderEmailDomain)
+}
+
+func resolveTelegramDisplayName(verified *TelegramIdentityVerified) string {
+	if verified == nil {
+		return "Telegram User"
+	}
+	fullName := strings.TrimSpace(strings.TrimSpace(verified.FirstName) + " " + strings.TrimSpace(verified.LastName))
+	if fullName != "" {
+		return fullName
+	}
+	if strings.TrimSpace(verified.Username) != "" {
+		return verified.Username
+	}
+	if strings.TrimSpace(verified.ProviderUserID) != "" {
+		return fmt.Sprintf("telegram_%s", strings.TrimSpace(verified.ProviderUserID))
+	}
+	return "Telegram User"
 }
 
 func normalizeEmail(email string) (string, error) {

@@ -3,6 +3,7 @@ package service
 import (
 	"strings"
 
+	"github.com/dujiao-next/internal/config"
 	"github.com/dujiao-next/internal/constants"
 	"github.com/dujiao-next/internal/models"
 )
@@ -25,6 +26,9 @@ func normalizeSettingValueByKey(key string, value map[string]interface{}) models
 		return normalizeOrderSetting(value)
 	case constants.SettingKeySiteConfig:
 		return normalizeSiteSetting(value)
+	case constants.SettingKeyTelegramAuthConfig:
+		setting := telegramAuthSettingFromJSON(models.JSON(value), TelegramAuthDefaultSetting(config.TelegramAuthConfig{}))
+		return TelegramAuthSettingToMap(setting)
 	default:
 		return models.JSON(value)
 	}

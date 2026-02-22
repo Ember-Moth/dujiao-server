@@ -31,6 +31,13 @@ user_jwt:
   expire_hours: 24  # 用户 Token 有效期（小时）
   remember_me_expire_hours: 168  # 记住我 Token 有效期（小时）
 
+telegram_auth:
+  enabled: false
+  bot_username: ""  # Telegram Bot 用户名（不含 @）
+  bot_token: ""     # Telegram Bot Token（敏感）
+  login_expire_seconds: 300
+  replay_ttl_seconds: 300
+
 redis:
   enabled: true
   host: 127.0.0.1

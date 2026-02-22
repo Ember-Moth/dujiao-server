@@ -17,33 +17,35 @@ type Container struct {
 	QueueClient *queue.Client
 
 	// Repositories
-	AdminRepo           repository.AdminRepository
-	UserRepo            repository.UserRepository
-	EmailVerifyCodeRepo repository.EmailVerifyCodeRepository
-	OrderRepo           repository.OrderRepository
-	PaymentRepo         repository.PaymentRepository
-	PaymentChannelRepo  repository.PaymentChannelRepository
-	CardSecretRepo      repository.CardSecretRepository
-	CardSecretBatchRepo repository.CardSecretBatchRepository
-	FulfillmentRepo     repository.FulfillmentRepository
-	ProductRepo         repository.ProductRepository
-	CartRepo            repository.CartRepository
-	CouponRepo          repository.CouponRepository
-	CouponUsageRepo     repository.CouponUsageRepository
-	PromotionRepo       repository.PromotionRepository
-	WalletRepo          repository.WalletRepository
-	PostRepo            repository.PostRepository
-	CategoryRepo        repository.CategoryRepository
-	BannerRepo          repository.BannerRepository
-	SettingRepo         repository.SettingRepository
-	UserLoginLogRepo    repository.UserLoginLogRepository
-	AuthzAuditLogRepo   repository.AuthzAuditLogRepository
-	DashboardRepo       repository.DashboardRepository
+	AdminRepo             repository.AdminRepository
+	UserRepo              repository.UserRepository
+	UserOAuthIdentityRepo repository.UserOAuthIdentityRepository
+	EmailVerifyCodeRepo   repository.EmailVerifyCodeRepository
+	OrderRepo             repository.OrderRepository
+	PaymentRepo           repository.PaymentRepository
+	PaymentChannelRepo    repository.PaymentChannelRepository
+	CardSecretRepo        repository.CardSecretRepository
+	CardSecretBatchRepo   repository.CardSecretBatchRepository
+	FulfillmentRepo       repository.FulfillmentRepository
+	ProductRepo           repository.ProductRepository
+	CartRepo              repository.CartRepository
+	CouponRepo            repository.CouponRepository
+	CouponUsageRepo       repository.CouponUsageRepository
+	PromotionRepo         repository.PromotionRepository
+	WalletRepo            repository.WalletRepository
+	PostRepo              repository.PostRepository
+	CategoryRepo          repository.CategoryRepository
+	BannerRepo            repository.BannerRepository
+	SettingRepo           repository.SettingRepository
+	UserLoginLogRepo      repository.UserLoginLogRepository
+	AuthzAuditLogRepo     repository.AuthzAuditLogRepository
+	DashboardRepo         repository.DashboardRepository
 
 	// Services
 	AuthzService          *authz.Service
 	AuthService           *service.AuthService
 	UserAuthService       *service.UserAuthService
+	TelegramAuthService   *service.TelegramAuthService
 	EmailService          *service.EmailService
 	CaptchaService        *service.CaptchaService
 	UploadService         *service.UploadService
@@ -101,6 +103,7 @@ func (c *Container) initRepositories() {
 	db := models.DB
 	c.AdminRepo = repository.NewAdminRepository(db)
 	c.UserRepo = repository.NewUserRepository(db)
+	c.UserOAuthIdentityRepo = repository.NewUserOAuthIdentityRepository(db)
 	c.EmailVerifyCodeRepo = repository.NewEmailVerifyCodeRepository(db)
 	c.OrderRepo = repository.NewOrderRepository(db)
 	c.PaymentRepo = repository.NewPaymentRepository(db)
@@ -150,10 +153,18 @@ func (c *Container) initServices() {
 		c.Config.Captcha = service.CaptchaSettingToConfig(captchaSetting)
 	}
 
+	telegramAuthSetting, err := c.SettingService.GetTelegramAuthSetting(c.Config.TelegramAuth)
+	if err != nil {
+		logger.Warnw("provider_load_telegram_auth_setting_failed", "error", err)
+	} else {
+		c.Config.TelegramAuth = service.TelegramAuthSettingToConfig(telegramAuthSetting)
+	}
+
 	c.EmailService = service.NewEmailService(&c.Config.Email)
 	c.CaptchaService = service.NewCaptchaService(c.SettingService, c.Config.Captcha)
 	c.AuthService = service.NewAuthService(c.Config, c.AdminRepo)
-	c.UserAuthService = service.NewUserAuthService(c.Config, c.UserRepo, c.EmailVerifyCodeRepo, c.EmailService)
+	c.TelegramAuthService = service.NewTelegramAuthService(c.Config.TelegramAuth)
+	c.UserAuthService = service.NewUserAuthService(c.Config, c.UserRepo, c.UserOAuthIdentityRepo, c.EmailVerifyCodeRepo, c.EmailService, c.TelegramAuthService)
 	c.UploadService = service.NewUploadService(c.Config)
 	c.ProductService = service.NewProductService(c.ProductRepo)
 	c.PostService = service.NewPostService(c.PostRepo)

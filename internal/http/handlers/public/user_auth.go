@@ -8,6 +8,7 @@ import (
 
 	"github.com/dujiao-next/internal/http/response"
 	"github.com/dujiao-next/internal/i18n"
+	"github.com/dujiao-next/internal/models"
 	"github.com/dujiao-next/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -154,7 +155,7 @@ type UserLoginRequest struct {
 func (h *Handler) UserLogin(c *gin.Context) {
 	var req UserLoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.recordUserLogin(c, req.Email, 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonBadRequest)
+		h.recordUserLogin(c, req.Email, 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonBadRequest, constants.LoginLogSourceWeb)
 		respondError(c, response.CodeBadRequest, "error.bad_request", err)
 		return
 	}
@@ -163,19 +164,19 @@ func (h *Handler) UserLogin(c *gin.Context) {
 		if captchaErr := h.CaptchaService.Verify(constants.CaptchaSceneLogin, req.CaptchaPayload.toServicePayload(), c.ClientIP()); captchaErr != nil {
 			switch {
 			case errors.Is(captchaErr, service.ErrCaptchaRequired):
-				h.recordUserLogin(c, req.Email, 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonCaptchaRequired)
+				h.recordUserLogin(c, req.Email, 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonCaptchaRequired, constants.LoginLogSourceWeb)
 				respondError(c, response.CodeBadRequest, "error.captcha_required", nil)
 				return
 			case errors.Is(captchaErr, service.ErrCaptchaInvalid):
-				h.recordUserLogin(c, req.Email, 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonCaptchaInvalid)
+				h.recordUserLogin(c, req.Email, 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonCaptchaInvalid, constants.LoginLogSourceWeb)
 				respondError(c, response.CodeBadRequest, "error.captcha_invalid", nil)
 				return
 			case errors.Is(captchaErr, service.ErrCaptchaConfigInvalid):
-				h.recordUserLogin(c, req.Email, 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonCaptchaConfigInvalid)
+				h.recordUserLogin(c, req.Email, 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonCaptchaConfigInvalid, constants.LoginLogSourceWeb)
 				respondError(c, response.CodeInternal, "error.captcha_config_invalid", captchaErr)
 				return
 			default:
-				h.recordUserLogin(c, req.Email, 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonCaptchaVerifyFailed)
+				h.recordUserLogin(c, req.Email, 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonCaptchaVerifyFailed, constants.LoginLogSourceWeb)
 				respondError(c, response.CodeInternal, "error.captcha_verify_failed", captchaErr)
 				return
 			}
@@ -186,25 +187,25 @@ func (h *Handler) UserLogin(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrInvalidEmail):
-			h.recordUserLogin(c, req.Email, 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonInvalidEmail)
+			h.recordUserLogin(c, req.Email, 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonInvalidEmail, constants.LoginLogSourceWeb)
 			respondError(c, response.CodeBadRequest, "error.email_invalid", nil)
 		case errors.Is(err, service.ErrInvalidCredentials):
-			h.recordUserLogin(c, req.Email, 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonInvalidCredentials)
+			h.recordUserLogin(c, req.Email, 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonInvalidCredentials, constants.LoginLogSourceWeb)
 			respondError(c, response.CodeUnauthorized, "error.login_invalid", nil)
 		case errors.Is(err, service.ErrEmailNotVerified):
-			h.recordUserLogin(c, req.Email, 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonEmailNotVerified)
+			h.recordUserLogin(c, req.Email, 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonEmailNotVerified, constants.LoginLogSourceWeb)
 			respondError(c, response.CodeUnauthorized, "error.email_not_verified", nil)
 		case errors.Is(err, service.ErrUserDisabled):
-			h.recordUserLogin(c, req.Email, 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonUserDisabled)
+			h.recordUserLogin(c, req.Email, 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonUserDisabled, constants.LoginLogSourceWeb)
 			respondError(c, response.CodeUnauthorized, "error.user_disabled", nil)
 		default:
-			h.recordUserLogin(c, req.Email, 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonInternalError)
+			h.recordUserLogin(c, req.Email, 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonInternalError, constants.LoginLogSourceWeb)
 			respondError(c, response.CodeInternal, "error.login_failed", err)
 		}
 		return
 	}
 
-	h.recordUserLogin(c, user.Email, user.ID, constants.LoginLogStatusSuccess, "")
+	h.recordUserLogin(c, user.Email, user.ID, constants.LoginLogStatusSuccess, "", constants.LoginLogSourceWeb)
 	response.Success(c, gin.H{
 		"user": gin.H{
 			"id":                user.ID,
@@ -217,7 +218,93 @@ func (h *Handler) UserLogin(c *gin.Context) {
 	})
 }
 
-func (h *Handler) recordUserLogin(c *gin.Context, email string, userID uint, status, failReason string) {
+// UserTelegramLoginRequest Telegram 登录请求
+type UserTelegramLoginRequest struct {
+	ID        int64  `json:"id" binding:"required"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Username  string `json:"username"`
+	PhotoURL  string `json:"photo_url"`
+	AuthDate  int64  `json:"auth_date" binding:"required"`
+	Hash      string `json:"hash" binding:"required"`
+}
+
+// UserBindTelegramRequest 绑定 Telegram 请求
+type UserBindTelegramRequest struct {
+	ID        int64  `json:"id" binding:"required"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Username  string `json:"username"`
+	PhotoURL  string `json:"photo_url"`
+	AuthDate  int64  `json:"auth_date" binding:"required"`
+	Hash      string `json:"hash" binding:"required"`
+}
+
+// UserTelegramLogin Telegram 登录
+func (h *Handler) UserTelegramLogin(c *gin.Context) {
+	var req UserTelegramLoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		h.recordUserLogin(c, "", 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonBadRequest, constants.LoginLogSourceTelegram)
+		respondError(c, response.CodeBadRequest, "error.bad_request", err)
+		return
+	}
+
+	user, token, expiresAt, err := h.UserAuthService.LoginWithTelegram(service.LoginWithTelegramInput{
+		Payload: service.TelegramLoginPayload{
+			ID:        req.ID,
+			FirstName: req.FirstName,
+			LastName:  req.LastName,
+			Username:  req.Username,
+			PhotoURL:  req.PhotoURL,
+			AuthDate:  req.AuthDate,
+			Hash:      req.Hash,
+		},
+		Context: c.Request.Context(),
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrTelegramAuthDisabled):
+			h.recordUserLogin(c, "", 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonTelegramConfig, constants.LoginLogSourceTelegram)
+			respondError(c, response.CodeBadRequest, "error.telegram_auth_disabled", nil)
+		case errors.Is(err, service.ErrTelegramAuthConfigInvalid):
+			h.recordUserLogin(c, "", 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonTelegramConfig, constants.LoginLogSourceTelegram)
+			respondError(c, response.CodeInternal, "error.telegram_auth_config_invalid", err)
+		case errors.Is(err, service.ErrTelegramAuthPayloadInvalid):
+			h.recordUserLogin(c, "", 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonTelegramInvalid, constants.LoginLogSourceTelegram)
+			respondError(c, response.CodeBadRequest, "error.telegram_auth_payload_invalid", nil)
+		case errors.Is(err, service.ErrTelegramAuthSignatureInvalid):
+			h.recordUserLogin(c, "", 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonTelegramInvalid, constants.LoginLogSourceTelegram)
+			respondError(c, response.CodeBadRequest, "error.telegram_auth_signature_invalid", nil)
+		case errors.Is(err, service.ErrTelegramAuthExpired):
+			h.recordUserLogin(c, "", 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonTelegramExpired, constants.LoginLogSourceTelegram)
+			respondError(c, response.CodeBadRequest, "error.telegram_auth_expired", nil)
+		case errors.Is(err, service.ErrTelegramAuthReplay):
+			h.recordUserLogin(c, "", 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonTelegramReplayed, constants.LoginLogSourceTelegram)
+			respondError(c, response.CodeBadRequest, "error.telegram_auth_replayed", nil)
+		case errors.Is(err, service.ErrUserDisabled):
+			h.recordUserLogin(c, "", 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonUserDisabled, constants.LoginLogSourceTelegram)
+			respondError(c, response.CodeUnauthorized, "error.user_disabled", nil)
+		default:
+			h.recordUserLogin(c, "", 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonInternalError, constants.LoginLogSourceTelegram)
+			respondError(c, response.CodeInternal, "error.login_failed", err)
+		}
+		return
+	}
+
+	h.recordUserLogin(c, user.Email, user.ID, constants.LoginLogStatusSuccess, "", constants.LoginLogSourceTelegram)
+	response.Success(c, gin.H{
+		"user": gin.H{
+			"id":                user.ID,
+			"email":             user.Email,
+			"nickname":          user.DisplayName,
+			"email_verified_at": user.EmailVerifiedAt,
+		},
+		"token":      token,
+		"expires_at": expiresAt.Format("2006-01-02T15:04:05Z07:00"),
+	})
+}
+
+func (h *Handler) recordUserLogin(c *gin.Context, email string, userID uint, status, failReason, source string) {
 	if h == nil || h.UserLoginLogService == nil {
 		return
 	}
@@ -236,7 +323,7 @@ func (h *Handler) recordUserLogin(c *gin.Context, email string, userID uint, sta
 		FailReason:  failReason,
 		ClientIP:    c.ClientIP(),
 		UserAgent:   c.GetHeader("User-Agent"),
-		LoginSource: constants.LoginLogSourceWeb,
+		LoginSource: source,
 		RequestID:   requestID,
 	})
 }
@@ -305,13 +392,141 @@ func (h *Handler) GetCurrentUser(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, gin.H{
-		"id":                user.ID,
-		"email":             user.Email,
-		"nickname":          user.DisplayName,
-		"email_verified_at": user.EmailVerifiedAt,
-		"locale":            user.Locale,
+	profile, err := h.userProfileResponse(user)
+	if err != nil {
+		respondError(c, response.CodeInternal, "error.user_fetch_failed", err)
+		return
+	}
+	response.Success(c, profile)
+}
+
+// GetMyTelegramBinding 获取当前用户 Telegram 绑定
+func (h *Handler) GetMyTelegramBinding(c *gin.Context) {
+	uid, ok := getUserID(c)
+	if !ok {
+		return
+	}
+	identity, err := h.UserAuthService.GetTelegramBinding(uid)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrNotFound):
+			respondError(c, response.CodeNotFound, "error.user_not_found", nil)
+		default:
+			respondError(c, response.CodeInternal, "error.user_fetch_failed", err)
+		}
+		return
+	}
+	if identity == nil {
+		response.Success(c, gin.H{"bound": false})
+		return
+	}
+	response.Success(c, telegramBindingResponse(identity))
+}
+
+// BindMyTelegram 绑定当前用户 Telegram
+func (h *Handler) BindMyTelegram(c *gin.Context) {
+	uid, ok := getUserID(c)
+	if !ok {
+		return
+	}
+	var req UserBindTelegramRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondError(c, response.CodeBadRequest, "error.bad_request", err)
+		return
+	}
+	identity, err := h.UserAuthService.BindTelegram(service.BindTelegramInput{
+		UserID: uid,
+		Payload: service.TelegramLoginPayload{
+			ID:        req.ID,
+			FirstName: req.FirstName,
+			LastName:  req.LastName,
+			Username:  req.Username,
+			PhotoURL:  req.PhotoURL,
+			AuthDate:  req.AuthDate,
+			Hash:      req.Hash,
+		},
+		Context: c.Request.Context(),
 	})
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrTelegramAuthDisabled):
+			respondError(c, response.CodeBadRequest, "error.telegram_auth_disabled", nil)
+		case errors.Is(err, service.ErrTelegramAuthConfigInvalid):
+			respondError(c, response.CodeInternal, "error.telegram_auth_config_invalid", err)
+		case errors.Is(err, service.ErrTelegramAuthPayloadInvalid):
+			respondError(c, response.CodeBadRequest, "error.telegram_auth_payload_invalid", nil)
+		case errors.Is(err, service.ErrTelegramAuthSignatureInvalid):
+			respondError(c, response.CodeBadRequest, "error.telegram_auth_signature_invalid", nil)
+		case errors.Is(err, service.ErrTelegramAuthExpired):
+			respondError(c, response.CodeBadRequest, "error.telegram_auth_expired", nil)
+		case errors.Is(err, service.ErrTelegramAuthReplay):
+			respondError(c, response.CodeBadRequest, "error.telegram_auth_replayed", nil)
+		case errors.Is(err, service.ErrUserOAuthIdentityExists):
+			respondError(c, response.CodeBadRequest, "error.telegram_bind_conflict", nil)
+		case errors.Is(err, service.ErrUserOAuthAlreadyBound):
+			respondError(c, response.CodeBadRequest, "error.telegram_already_bound", nil)
+		default:
+			respondError(c, response.CodeInternal, "error.user_update_failed", err)
+		}
+		return
+	}
+	response.Success(c, telegramBindingResponse(identity))
+}
+
+// UnbindMyTelegram 解绑当前用户 Telegram
+func (h *Handler) UnbindMyTelegram(c *gin.Context) {
+	uid, ok := getUserID(c)
+	if !ok {
+		return
+	}
+	err := h.UserAuthService.UnbindTelegram(uid)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrUserOAuthNotBound):
+			respondError(c, response.CodeBadRequest, "error.telegram_not_bound", nil)
+		case errors.Is(err, service.ErrTelegramUnbindRequiresEmail):
+			respondError(c, response.CodeBadRequest, "error.telegram_unbind_requires_email", nil)
+		default:
+			respondError(c, response.CodeInternal, "error.user_update_failed", err)
+		}
+		return
+	}
+	response.Success(c, gin.H{"unbound": true})
+}
+
+func telegramBindingResponse(identity *models.UserOAuthIdentity) gin.H {
+	if identity == nil {
+		return gin.H{"bound": false}
+	}
+	return gin.H{
+		"bound":            true,
+		"provider":         identity.Provider,
+		"provider_user_id": identity.ProviderUserID,
+		"username":         identity.Username,
+		"avatar_url":       identity.AvatarURL,
+		"auth_at":          identity.AuthAt,
+		"updated_at":       identity.UpdatedAt,
+	}
+}
+
+func (h *Handler) userProfileResponse(user *models.User) (gin.H, error) {
+	emailMode, err := h.UserAuthService.ResolveEmailChangeMode(user)
+	if err != nil {
+		return nil, err
+	}
+	passwordMode, err := h.UserAuthService.ResolvePasswordChangeMode(user)
+	if err != nil {
+		return nil, err
+	}
+	return gin.H{
+		"id":                   user.ID,
+		"email":                user.Email,
+		"nickname":             user.DisplayName,
+		"email_verified_at":    user.EmailVerifiedAt,
+		"locale":               user.Locale,
+		"email_change_mode":    emailMode,
+		"password_change_mode": passwordMode,
+	}, nil
 }
 
 // UserProfileUpdateRequest 更新资料请求
@@ -346,13 +561,12 @@ func (h *Handler) UpdateUserProfile(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, gin.H{
-		"id":                user.ID,
-		"email":             user.Email,
-		"nickname":          user.DisplayName,
-		"email_verified_at": user.EmailVerifiedAt,
-		"locale":            user.Locale,
-	})
+	profile, err := h.userProfileResponse(user)
+	if err != nil {
+		respondError(c, response.CodeInternal, "error.user_update_failed", err)
+		return
+	}
+	response.Success(c, profile)
 }
 
 // ChangeEmailSendCodeRequest 更换邮箱验证码请求
@@ -404,7 +618,7 @@ func (h *Handler) SendChangeEmailCode(c *gin.Context) {
 // ChangeEmailRequest 更换邮箱请求
 type ChangeEmailRequest struct {
 	NewEmail string `json:"new_email" binding:"required"`
-	OldCode  string `json:"old_code" binding:"required"`
+	OldCode  string `json:"old_code"`
 	NewCode  string `json:"new_code" binding:"required"`
 }
 
@@ -444,18 +658,17 @@ func (h *Handler) ChangeEmail(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, gin.H{
-		"id":                user.ID,
-		"email":             user.Email,
-		"nickname":          user.DisplayName,
-		"email_verified_at": user.EmailVerifiedAt,
-		"locale":            user.Locale,
-	})
+	profile, respErr := h.userProfileResponse(user)
+	if respErr != nil {
+		respondError(c, response.CodeInternal, "error.email_change_failed", respErr)
+		return
+	}
+	response.Success(c, profile)
 }
 
 // ChangeUserPasswordRequest 用户改密请求
 type ChangeUserPasswordRequest struct {
-	OldPassword string `json:"old_password" binding:"required"`
+	OldPassword string `json:"old_password"`
 	NewPassword string `json:"new_password" binding:"required"`
 }
 

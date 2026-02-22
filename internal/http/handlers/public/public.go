@@ -91,6 +91,17 @@ func (h *Handler) GetConfig(c *gin.Context) {
 		}
 		data["captcha"] = publicCaptcha
 	}
+	telegramAuthConfig := map[string]interface{}{
+		"enabled":      false,
+		"bot_username": "",
+	}
+	if h.TelegramAuthService != nil {
+		telegramAuthConfig = h.TelegramAuthService.PublicConfig()
+	} else if h.Config != nil {
+		telegramAuthConfig["enabled"] = h.Config.TelegramAuth.Enabled
+		telegramAuthConfig["bot_username"] = strings.TrimSpace(h.Config.TelegramAuth.BotUsername)
+	}
+	data["telegram_auth"] = telegramAuthConfig
 
 	_ = cache.SetJSON(c.Request.Context(), publicConfigCacheKey, data, publicConfigCacheTTL)
 	response.Success(c, data)

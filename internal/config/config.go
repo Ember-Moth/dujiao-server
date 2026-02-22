@@ -11,19 +11,20 @@ import (
 
 // Config 应用配置结构
 type Config struct {
-	Server   ServerConfig   `mapstructure:"server"`
-	Log      LogConfig      `mapstructure:"log"`
-	Database DatabaseConfig `mapstructure:"database"`
-	JWT      JWTConfig      `mapstructure:"jwt"`
-	UserJWT  JWTConfig      `mapstructure:"user_jwt"`
-	Redis    RedisConfig    `mapstructure:"redis"`
-	Queue    QueueConfig    `mapstructure:"queue"`
-	Upload   UploadConfig   `mapstructure:"upload"`
-	CORS     CORSConfig     `mapstructure:"cors"`
-	Security SecurityConfig `mapstructure:"security"`
-	Email    EmailConfig    `mapstructure:"email"`
-	Order    OrderConfig    `mapstructure:"order"`
-	Captcha  CaptchaConfig  `mapstructure:"captcha"`
+	Server       ServerConfig       `mapstructure:"server"`
+	Log          LogConfig          `mapstructure:"log"`
+	Database     DatabaseConfig     `mapstructure:"database"`
+	JWT          JWTConfig          `mapstructure:"jwt"`
+	UserJWT      JWTConfig          `mapstructure:"user_jwt"`
+	TelegramAuth TelegramAuthConfig `mapstructure:"telegram_auth"`
+	Redis        RedisConfig        `mapstructure:"redis"`
+	Queue        QueueConfig        `mapstructure:"queue"`
+	Upload       UploadConfig       `mapstructure:"upload"`
+	CORS         CORSConfig         `mapstructure:"cors"`
+	Security     SecurityConfig     `mapstructure:"security"`
+	Email        EmailConfig        `mapstructure:"email"`
+	Order        OrderConfig        `mapstructure:"order"`
+	Captcha      CaptchaConfig      `mapstructure:"captcha"`
 }
 
 // ServerConfig 服务器配置
@@ -75,6 +76,15 @@ type JWTConfig struct {
 	SecretKey             string `mapstructure:"secret"`
 	ExpireHours           int    `mapstructure:"expire_hours"`
 	RememberMeExpireHours int    `mapstructure:"remember_me_expire_hours"`
+}
+
+// TelegramAuthConfig Telegram 登录配置
+type TelegramAuthConfig struct {
+	Enabled            bool   `mapstructure:"enabled"`
+	BotUsername        string `mapstructure:"bot_username"`
+	BotToken           string `mapstructure:"bot_token"`
+	LoginExpireSeconds int    `mapstructure:"login_expire_seconds"`
+	ReplayTTLSeconds   int    `mapstructure:"replay_ttl_seconds"`
 }
 
 // RedisConfig Redis 配置
@@ -229,6 +239,11 @@ func Load() *Config {
 	viper.SetDefault("user_jwt.secret", "user-change-me-in-production")
 	viper.SetDefault("user_jwt.expire_hours", 24)
 	viper.SetDefault("user_jwt.remember_me_expire_hours", 168)
+	viper.SetDefault("telegram_auth.enabled", false)
+	viper.SetDefault("telegram_auth.bot_username", "")
+	viper.SetDefault("telegram_auth.bot_token", "")
+	viper.SetDefault("telegram_auth.login_expire_seconds", 300)
+	viper.SetDefault("telegram_auth.replay_ttl_seconds", 300)
 	viper.SetDefault("redis.enabled", true)
 	viper.SetDefault("redis.host", "127.0.0.1")
 	viper.SetDefault("redis.port", 6379)

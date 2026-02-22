@@ -95,6 +95,18 @@ func Del(ctx context.Context, key string) error {
 	return redisClient.Del(ctx, buildKey(key)).Err()
 }
 
+// SetNX 原子写入（键不存在时写入并设置过期）
+func SetNX(ctx context.Context, key string, value interface{}, ttl time.Duration) (bool, error) {
+	if !Enabled() {
+		return true, nil
+	}
+	result, err := redisClient.SetNX(ctx, buildKey(key), value, ttl).Result()
+	if err != nil {
+		return false, err
+	}
+	return result, nil
+}
+
 func buildKey(key string) string {
 	trimmed := strings.TrimSpace(key)
 	if trimmed == "" {
