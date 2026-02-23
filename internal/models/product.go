@@ -31,7 +31,8 @@ type Product struct {
 	DeletedAt            gorm.DeletedAt `gorm:"index" json:"-"`                                                     // 软删除时间
 
 	// 关联
-	Category Category `gorm:"foreignKey:CategoryID" json:"category,omitempty"` // 分类信息
+	Category Category     `gorm:"foreignKey:CategoryID" json:"category,omitempty"` // 分类信息
+	SKUs     []ProductSKU `gorm:"foreignKey:ProductID" json:"skus,omitempty"`      // SKU 列表
 }
 
 // TableName 指定表名

@@ -9,8 +9,18 @@ import (
 	"github.com/dujiao-next/internal/repository"
 )
 
-func summarizeManualStockItems(items []models.OrderItem) map[uint]int {
-	result := make(map[uint]int)
+type manualStockSummary struct {
+	BySKU           map[uint]int
+	ByProductAll    map[uint]int
+	ByLegacyProduct map[uint]int
+}
+
+func summarizeManualStockItems(items []models.OrderItem) manualStockSummary {
+	result := manualStockSummary{
+		BySKU:           make(map[uint]int),
+		ByProductAll:    make(map[uint]int),
+		ByLegacyProduct: make(map[uint]int),
+	}
 	for _, item := range items {
 		if strings.TrimSpace(item.FulfillmentType) != constants.FulfillmentTypeManual {
 			continue
@@ -18,13 +28,41 @@ func summarizeManualStockItems(items []models.OrderItem) map[uint]int {
 		if item.ProductID == 0 || item.Quantity <= 0 {
 			continue
 		}
-		result[item.ProductID] += item.Quantity
+		result.ByProductAll[item.ProductID] += item.Quantity
+		if item.SKUID > 0 {
+			result.BySKU[item.SKUID] += item.Quantity
+			continue
+		}
+		result.ByLegacyProduct[item.ProductID] += item.Quantity
 	}
 	return result
 }
 
-func releaseManualStockByItems(productRepo repository.ProductRepository, items []models.OrderItem) error {
-	for productID, quantity := range summarizeManualStockItems(items) {
+func releaseManualStockByItems(productRepo repository.ProductRepository, productSKURepo repository.ProductSKURepository, items []models.OrderItem) error {
+	summary := summarizeManualStockItems(items)
+	if productSKURepo != nil {
+		for skuID, quantity := range summary.BySKU {
+			sku, err := productSKURepo.GetByID(skuID)
+			if err != nil {
+				return err
+			}
+			if sku == nil || sku.ManualStockTotal <= 0 {
+				continue
+			}
+			if _, err := productSKURepo.ReleaseManualStock(skuID, quantity); err != nil {
+				return err
+			}
+		}
+	}
+
+	productSummary := summary.ByLegacyProduct
+	if productSKURepo == nil {
+		productSummary = summary.ByProductAll
+	}
+	if productRepo == nil {
+		return nil
+	}
+	for productID, quantity := range productSummary {
 		product, err := productRepo.GetByID(strconv.FormatUint(uint64(productID), 10))
 		if err != nil {
 			return err
@@ -39,8 +77,31 @@ func releaseManualStockByItems(productRepo repository.ProductRepository, items [
 	return nil
 }
 
-func consumeManualStockByItems(productRepo repository.ProductRepository, items []models.OrderItem) error {
-	for productID, quantity := range summarizeManualStockItems(items) {
+func consumeManualStockByItems(productRepo repository.ProductRepository, productSKURepo repository.ProductSKURepository, items []models.OrderItem) error {
+	summary := summarizeManualStockItems(items)
+	if productSKURepo != nil {
+		for skuID, quantity := range summary.BySKU {
+			sku, err := productSKURepo.GetByID(skuID)
+			if err != nil {
+				return err
+			}
+			if sku == nil || sku.ManualStockTotal <= 0 {
+				continue
+			}
+			if _, err := productSKURepo.ConsumeManualStock(skuID, quantity); err != nil {
+				return err
+			}
+		}
+	}
+
+	productSummary := summary.ByLegacyProduct
+	if productSKURepo == nil {
+		productSummary = summary.ByProductAll
+	}
+	if productRepo == nil {
+		return nil
+	}
+	for productID, quantity := range productSummary {
 		product, err := productRepo.GetByID(strconv.FormatUint(uint64(productID), 10))
 		if err != nil {
 			return err

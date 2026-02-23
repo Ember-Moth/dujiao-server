@@ -67,6 +67,8 @@ var (
 	ErrManualFormOptionInvalid       = errors.New("manual form option invalid")
 	ErrProductFetchFailed            = errors.New("product fetch failed")
 	ErrProductNotFound               = errors.New("product not found")
+	ErrProductSKURequired            = errors.New("product sku required")
+	ErrProductSKUInvalid             = errors.New("product sku invalid")
 	ErrInvalidOrderItem              = errors.New("invalid order item")
 	ErrInvalidOrderAmount            = errors.New("invalid order amount")
 	ErrOrderCurrencyMismatch         = errors.New("order currency mismatch")

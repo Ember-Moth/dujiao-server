@@ -12,15 +12,15 @@ import (
 // CardSecretRepository 卡密库存数据访问接口
 type CardSecretRepository interface {
 	CreateBatch(items []models.CardSecret) error
-	ListByProduct(productID uint, status string, page, pageSize int) ([]models.CardSecret, int64, error)
+	ListByProduct(productID, skuID uint, status string, page, pageSize int) ([]models.CardSecret, int64, error)
 	ListAll(status string, page, pageSize int) ([]models.CardSecret, int64, error)
 	ListByOrderAndStatus(orderID uint, status string) ([]models.CardSecret, error)
 	GetByID(id uint) (*models.CardSecret, error)
 	Update(secret *models.CardSecret) error
-	CountByProduct(productID uint) (int64, int64, int64, error)
-	CountAvailable(productID uint) (int64, error)
+	CountByProduct(productID, skuID uint) (int64, int64, int64, error)
+	CountAvailable(productID, skuID uint) (int64, error)
 	CountAvailableByProductIDs(productIDs []uint) (map[uint]int64, error)
-	CountReserved(productID uint) (int64, error)
+	CountReserved(productID, skuID uint) (int64, error)
 	Reserve(ids []uint, orderID uint, reservedAt time.Time) (int64, error)
 	ReleaseByOrder(orderID uint) (int64, error)
 	MarkUsed(ids []uint, orderID uint, usedAt time.Time) (int64, error)
@@ -54,11 +54,14 @@ func (r *GormCardSecretRepository) CreateBatch(items []models.CardSecret) error 
 }
 
 // ListByProduct 按商品获取卡密列表
-func (r *GormCardSecretRepository) ListByProduct(productID uint, status string, page, pageSize int) ([]models.CardSecret, int64, error) {
+func (r *GormCardSecretRepository) ListByProduct(productID, skuID uint, status string, page, pageSize int) ([]models.CardSecret, int64, error) {
 	if productID == 0 {
 		return nil, 0, errors.New("invalid product id")
 	}
 	query := r.db.Model(&models.CardSecret{}).Where("product_id = ?", productID).Preload("Batch")
+	if skuID > 0 {
+		query = query.Where("sku_id = ?", skuID)
+	}
 	if status != "" {
 		query = query.Where("status = ?", status)
 	}
@@ -138,26 +141,32 @@ func (r *GormCardSecretRepository) Update(secret *models.CardSecret) error {
 }
 
 // CountByProduct 统计库存数量（总/可用/已用）
-func (r *GormCardSecretRepository) CountByProduct(productID uint) (int64, int64, int64, error) {
+func (r *GormCardSecretRepository) CountByProduct(productID, skuID uint) (int64, int64, int64, error) {
 	if productID == 0 {
 		return 0, 0, 0, errors.New("invalid product id")
 	}
 
+	buildQuery := func() *gorm.DB {
+		query := r.db.Model(&models.CardSecret{}).Where("product_id = ?", productID)
+		if skuID > 0 {
+			query = query.Where("sku_id = ?", skuID)
+		}
+		return query
+	}
+
 	var total int64
-	if err := r.db.Model(&models.CardSecret{}).Where("product_id = ?", productID).Count(&total).Error; err != nil {
+	if err := buildQuery().Count(&total).Error; err != nil {
 		return 0, 0, 0, err
 	}
 
 	var available int64
-	if err := r.db.Model(&models.CardSecret{}).
-		Where("product_id = ? AND status = ?", productID, models.CardSecretStatusAvailable).
+	if err := buildQuery().Where("status = ?", models.CardSecretStatusAvailable).
 		Count(&available).Error; err != nil {
 		return 0, 0, 0, err
 	}
 
 	var used int64
-	if err := r.db.Model(&models.CardSecret{}).
-		Where("product_id = ? AND status = ?", productID, models.CardSecretStatusUsed).
+	if err := buildQuery().Where("status = ?", models.CardSecretStatusUsed).
 		Count(&used).Error; err != nil {
 		return 0, 0, 0, err
 	}
@@ -165,13 +174,17 @@ func (r *GormCardSecretRepository) CountByProduct(productID uint) (int64, int64,
 }
 
 // CountAvailable 统计可用库存
-func (r *GormCardSecretRepository) CountAvailable(productID uint) (int64, error) {
+func (r *GormCardSecretRepository) CountAvailable(productID, skuID uint) (int64, error) {
 	if productID == 0 {
 		return 0, errors.New("invalid product id")
 	}
+	query := r.db.Model(&models.CardSecret{}).
+		Where("product_id = ? AND status = ?", productID, models.CardSecretStatusAvailable)
+	if skuID > 0 {
+		query = query.Where("sku_id = ?", skuID)
+	}
 	var count int64
-	if err := r.db.Model(&models.CardSecret{}).
-		Where("product_id = ? AND status = ?", productID, models.CardSecretStatusAvailable).
+	if err := query.
 		Count(&count).Error; err != nil {
 		return 0, err
 	}
@@ -207,13 +220,17 @@ func (r *GormCardSecretRepository) CountAvailableByProductIDs(productIDs []uint)
 }
 
 // CountReserved 统计占用库存
-func (r *GormCardSecretRepository) CountReserved(productID uint) (int64, error) {
+func (r *GormCardSecretRepository) CountReserved(productID, skuID uint) (int64, error) {
 	if productID == 0 {
 		return 0, errors.New("invalid product id")
 	}
+	query := r.db.Model(&models.CardSecret{}).
+		Where("product_id = ? AND status = ?", productID, models.CardSecretStatusReserved)
+	if skuID > 0 {
+		query = query.Where("sku_id = ?", skuID)
+	}
 	var count int64
-	if err := r.db.Model(&models.CardSecret{}).
-		Where("product_id = ? AND status = ?", productID, models.CardSecretStatusReserved).
+	if err := query.
 		Count(&count).Error; err != nil {
 		return 0, err
 	}

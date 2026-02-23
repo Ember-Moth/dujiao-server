@@ -12,7 +12,7 @@ import (
 type CardSecretBatchRepository interface {
 	Create(batch *models.CardSecretBatch) error
 	GetByID(id uint) (*models.CardSecretBatch, error)
-	ListByProduct(productID uint, page, pageSize int) ([]models.CardSecretBatch, int64, error)
+	ListByProduct(productID, skuID uint, page, pageSize int) ([]models.CardSecretBatch, int64, error)
 	WithTx(tx *gorm.DB) *GormCardSecretBatchRepository
 }
 
@@ -58,11 +58,14 @@ func (r *GormCardSecretBatchRepository) GetByID(id uint) (*models.CardSecretBatc
 }
 
 // ListByProduct 按商品获取批次列表
-func (r *GormCardSecretBatchRepository) ListByProduct(productID uint, page, pageSize int) ([]models.CardSecretBatch, int64, error) {
+func (r *GormCardSecretBatchRepository) ListByProduct(productID, skuID uint, page, pageSize int) ([]models.CardSecretBatch, int64, error) {
 	if productID == 0 {
 		return nil, 0, errors.New("invalid product id")
 	}
 	query := r.db.Model(&models.CardSecretBatch{}).Where("product_id = ?", productID)
+	if skuID > 0 {
+		query = query.Where("sku_id = ?", skuID)
+	}
 
 	var total int64
 	if err := query.Count(&total).Error; err != nil {

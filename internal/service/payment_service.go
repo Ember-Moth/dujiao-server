@@ -34,25 +34,27 @@ import (
 
 // PaymentService 支付服务
 type PaymentService struct {
-	orderRepo   repository.OrderRepository
-	productRepo repository.ProductRepository
-	paymentRepo repository.PaymentRepository
-	channelRepo repository.PaymentChannelRepository
-	walletRepo  repository.WalletRepository
-	queueClient *queue.Client
-	walletSvc   *WalletService
+	orderRepo      repository.OrderRepository
+	productRepo    repository.ProductRepository
+	productSKURepo repository.ProductSKURepository
+	paymentRepo    repository.PaymentRepository
+	channelRepo    repository.PaymentChannelRepository
+	walletRepo     repository.WalletRepository
+	queueClient    *queue.Client
+	walletSvc      *WalletService
 }
 
 // NewPaymentService 创建支付服务
-func NewPaymentService(orderRepo repository.OrderRepository, productRepo repository.ProductRepository, paymentRepo repository.PaymentRepository, channelRepo repository.PaymentChannelRepository, walletRepo repository.WalletRepository, queueClient *queue.Client, walletSvc *WalletService) *PaymentService {
+func NewPaymentService(orderRepo repository.OrderRepository, productRepo repository.ProductRepository, productSKURepo repository.ProductSKURepository, paymentRepo repository.PaymentRepository, channelRepo repository.PaymentChannelRepository, walletRepo repository.WalletRepository, queueClient *queue.Client, walletSvc *WalletService) *PaymentService {
 	return &PaymentService{
-		orderRepo:   orderRepo,
-		productRepo: productRepo,
-		paymentRepo: paymentRepo,
-		channelRepo: channelRepo,
-		walletRepo:  walletRepo,
-		queueClient: queueClient,
-		walletSvc:   walletSvc,
+		orderRepo:      orderRepo,
+		productRepo:    productRepo,
+		productSKURepo: productSKURepo,
+		paymentRepo:    paymentRepo,
+		channelRepo:    channelRepo,
+		walletRepo:     walletRepo,
+		queueClient:    queueClient,
+		walletSvc:      walletSvc,
 	}
 }
 
@@ -1516,6 +1518,10 @@ func (s *PaymentService) markOrderPaid(tx *gorm.DB, order *models.Order, now tim
 	}
 	orderRepo := s.orderRepo.WithTx(tx)
 	productRepo := s.productRepo.WithTx(tx)
+	var productSKURepo repository.ProductSKURepository
+	if s.productSKURepo != nil {
+		productSKURepo = s.productSKURepo.WithTx(tx)
+	}
 
 	onlineAmount := normalizeOrderAmount(order.TotalAmount.Decimal.Sub(order.WalletPaidAmount.Decimal))
 	orderUpdates := map[string]interface{}{
@@ -1544,7 +1550,7 @@ func (s *PaymentService) markOrderPaid(tx *gorm.DB, order *models.Order, now tim
 			}); err != nil {
 				return ErrOrderUpdateFailed
 			}
-			if err := consumeManualStockByItems(productRepo, child.Items); err != nil {
+			if err := consumeManualStockByItems(productRepo, productSKURepo, child.Items); err != nil {
 				return err
 			}
 			child.Status = childStatus
@@ -1564,7 +1570,7 @@ func (s *PaymentService) markOrderPaid(tx *gorm.DB, order *models.Order, now tim
 		return nil
 	}
 
-	if err := consumeManualStockByItems(productRepo, order.Items); err != nil {
+	if err := consumeManualStockByItems(productRepo, productSKURepo, order.Items); err != nil {
 		return err
 	}
 	return nil

@@ -205,6 +205,16 @@ func (h *Handler) UpdateAdminPassword(c *gin.Context) {
 
 // ====================  商品管理  ====================
 
+type ProductSKURequest struct {
+	ID               uint                   `json:"id"`
+	SKUCode          string                 `json:"sku_code" binding:"required"`
+	SpecValuesJSON   map[string]interface{} `json:"spec_values"`
+	PriceAmount      float64                `json:"price_amount" binding:"required"`
+	ManualStockTotal int                    `json:"manual_stock_total"`
+	IsActive         *bool                  `json:"is_active"`
+	SortOrder        int                    `json:"sort_order"`
+}
+
 // CreateProductRequest 创建商品请求
 type CreateProductRequest struct {
 	CategoryID       uint                   `json:"category_id" binding:"required"`
@@ -220,8 +230,28 @@ type CreateProductRequest struct {
 	PurchaseType     string                 `json:"purchase_type"`
 	FulfillmentType  string                 `json:"fulfillment_type"`
 	ManualStockTotal *int                   `json:"manual_stock_total"`
+	SKUs             []ProductSKURequest    `json:"skus"`
 	IsActive         *bool                  `json:"is_active"`
 	SortOrder        int                    `json:"sort_order"`
+}
+
+func toProductSKUInputs(items []ProductSKURequest) []service.ProductSKUInput {
+	if len(items) == 0 {
+		return nil
+	}
+	result := make([]service.ProductSKUInput, 0, len(items))
+	for _, item := range items {
+		result = append(result, service.ProductSKUInput{
+			ID:               item.ID,
+			SKUCode:          item.SKUCode,
+			SpecValuesJSON:   item.SpecValuesJSON,
+			PriceAmount:      decimal.NewFromFloat(item.PriceAmount),
+			ManualStockTotal: item.ManualStockTotal,
+			IsActive:         item.IsActive,
+			SortOrder:        item.SortOrder,
+		})
+	}
+	return result
 }
 
 // CreateProduct 创建商品
@@ -246,6 +276,7 @@ func (h *Handler) CreateProduct(c *gin.Context) {
 		PurchaseType:         req.PurchaseType,
 		FulfillmentType:      req.FulfillmentType,
 		ManualStockTotal:     req.ManualStockTotal,
+		SKUs:                 toProductSKUInputs(req.SKUs),
 		IsActive:             req.IsActive,
 		SortOrder:            req.SortOrder,
 	})
@@ -272,6 +303,10 @@ func (h *Handler) CreateProduct(c *gin.Context) {
 		}
 		if errors.Is(err, service.ErrManualStockInvalid) {
 			respondError(c, response.CodeBadRequest, "error.manual_stock_invalid", nil)
+			return
+		}
+		if errors.Is(err, service.ErrProductSKUInvalid) {
+			respondError(c, response.CodeBadRequest, "error.bad_request", nil)
 			return
 		}
 		respondError(c, response.CodeInternal, "error.product_create_failed", err)
@@ -305,6 +340,7 @@ func (h *Handler) UpdateProduct(c *gin.Context) {
 		PurchaseType:         req.PurchaseType,
 		FulfillmentType:      req.FulfillmentType,
 		ManualStockTotal:     req.ManualStockTotal,
+		SKUs:                 toProductSKUInputs(req.SKUs),
 		IsActive:             req.IsActive,
 		SortOrder:            req.SortOrder,
 	})
@@ -335,6 +371,10 @@ func (h *Handler) UpdateProduct(c *gin.Context) {
 		}
 		if errors.Is(err, service.ErrManualStockInvalid) {
 			respondError(c, response.CodeBadRequest, "error.manual_stock_invalid", nil)
+			return
+		}
+		if errors.Is(err, service.ErrProductSKUInvalid) {
+			respondError(c, response.CodeBadRequest, "error.bad_request", nil)
 			return
 		}
 		respondError(c, response.CodeInternal, "error.product_update_failed", err)

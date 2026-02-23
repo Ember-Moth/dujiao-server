@@ -206,35 +206,48 @@ func (s *FulfillmentService) CreateAuto(orderID uint) (*models.Fulfillment, erro
 			return ErrFulfillmentCreateFailed
 		}
 		secretRepo := s.secretRepo.WithTx(tx)
+		reservedRows, err := secretRepo.ListByOrderAndStatus(orderID, models.CardSecretStatusReserved)
+		if err != nil {
+			return err
+		}
+		reservedByKey := make(map[string][]models.CardSecret)
+		for _, reserved := range reservedRows {
+			key := buildOrderItemKey(reserved.ProductID, reserved.SKUID)
+			reservedByKey[key] = append(reservedByKey[key], reserved)
+		}
 		var secrets []models.CardSecret
 		for _, item := range order.Items {
 			if item.ProductID == 0 || item.Quantity <= 0 {
 				return ErrFulfillmentInvalid
 			}
-			var rows []models.CardSecret
-			reservedRows, err := secretRepo.ListByOrderAndStatus(orderID, models.CardSecretStatusReserved)
-			if err != nil {
-				return err
-			}
-			for _, reserved := range reservedRows {
-				if reserved.ProductID != item.ProductID {
-					continue
+			key := buildOrderItemKey(item.ProductID, item.SKUID)
+			cachedReserved := reservedByKey[key]
+			selected := make([]models.CardSecret, 0, item.Quantity)
+			if len(cachedReserved) > 0 {
+				take := item.Quantity
+				if len(cachedReserved) < take {
+					take = len(cachedReserved)
 				}
-				rows = append(rows, reserved)
+				selected = append(selected, cachedReserved[:take]...)
+				reservedByKey[key] = cachedReserved[take:]
 			}
-			if len(rows) < item.Quantity {
-				need := item.Quantity - len(rows)
+
+			if len(selected) < item.Quantity {
+				need := item.Quantity - len(selected)
 				var availableRows []models.CardSecret
-				if err := tx.Where("product_id = ? AND status = ?", item.ProductID, models.CardSecretStatusAvailable).
-					Order("id asc").Limit(need).Find(&availableRows).Error; err != nil {
+				query := tx.Where("product_id = ? AND status = ?", item.ProductID, models.CardSecretStatusAvailable)
+				if item.SKUID > 0 {
+					query = query.Where("sku_id = ?", item.SKUID)
+				}
+				if err := query.Order("id asc").Limit(need).Find(&availableRows).Error; err != nil {
 					return err
 				}
-				rows = append(rows, availableRows...)
+				selected = append(selected, availableRows...)
 			}
-			if len(rows) < item.Quantity {
+			if len(selected) < item.Quantity {
 				return ErrCardSecretInsufficient
 			}
-			secrets = append(secrets, rows...)
+			secrets = append(secrets, selected...)
 		}
 
 		ids := make([]uint, 0, len(secrets))

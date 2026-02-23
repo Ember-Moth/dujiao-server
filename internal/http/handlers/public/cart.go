@@ -14,6 +14,7 @@ import (
 // CartItemRequest 购物车项请求
 type CartItemRequest struct {
 	ProductID       uint   `json:"product_id" binding:"required"`
+	SKUID           uint   `json:"sku_id"`
 	Quantity        int    `json:"quantity" binding:"required"`
 	FulfillmentType string `json:"fulfillment_type"`
 }
@@ -34,6 +35,7 @@ type CartProduct struct {
 // CartItemResponse 购物车项响应
 type CartItemResponse struct {
 	ProductID       uint         `json:"product_id"`
+	SKUID           uint         `json:"sku_id"`
 	Quantity        int          `json:"quantity"`
 	FulfillmentType string       `json:"fulfillment_type"`
 	UnitPrice       models.Money `json:"unit_price"`
@@ -84,6 +86,7 @@ func (h *Handler) GetCart(c *gin.Context) {
 		}
 		respItems = append(respItems, CartItemResponse{
 			ProductID:       item.ProductID,
+			SKUID:           item.SKUID,
 			Quantity:        item.Quantity,
 			FulfillmentType: item.FulfillmentType,
 			UnitPrice:       item.UnitPrice,
@@ -108,7 +111,7 @@ func (h *Handler) UpsertCartItem(c *gin.Context) {
 		return
 	}
 	if req.Quantity <= 0 {
-		if err := h.CartService.RemoveItem(uid, req.ProductID); err != nil {
+		if err := h.CartService.RemoveItem(uid, req.ProductID, req.SKUID); err != nil {
 			respondError(c, response.CodeInternal, "error.order_update_failed", err)
 			return
 		}
@@ -118,14 +121,21 @@ func (h *Handler) UpsertCartItem(c *gin.Context) {
 	if err := h.CartService.UpsertItem(service.UpsertCartItemInput{
 		UserID:          uid,
 		ProductID:       req.ProductID,
+		SKUID:           req.SKUID,
 		Quantity:        req.Quantity,
 		FulfillmentType: req.FulfillmentType,
 	}); err != nil {
 		switch {
+		case errors.Is(err, service.ErrProductSKURequired):
+			respondError(c, response.CodeBadRequest, "error.order_item_invalid", nil)
+		case errors.Is(err, service.ErrProductSKUInvalid):
+			respondError(c, response.CodeBadRequest, "error.order_item_invalid", nil)
 		case errors.Is(err, service.ErrInvalidOrderItem):
 			respondError(c, response.CodeBadRequest, "error.order_item_invalid", nil)
 		case errors.Is(err, service.ErrProductNotAvailable):
 			respondError(c, response.CodeBadRequest, "error.product_not_available", nil)
+		case errors.Is(err, service.ErrManualStockInsufficient):
+			respondError(c, response.CodeBadRequest, "error.manual_stock_insufficient", nil)
 		case errors.Is(err, service.ErrFulfillmentInvalid):
 			respondError(c, response.CodeBadRequest, "error.fulfillment_invalid", nil)
 		default:
@@ -148,7 +158,8 @@ func (h *Handler) DeleteCartItem(c *gin.Context) {
 		respondError(c, response.CodeBadRequest, "error.order_item_invalid", nil)
 		return
 	}
-	if err := h.CartService.RemoveItem(uid, uint(productID)); err != nil {
+	skuID, _ := strconv.ParseUint(c.DefaultQuery("sku_id", "0"), 10, 64)
+	if err := h.CartService.RemoveItem(uid, uint(productID), uint(skuID)); err != nil {
 		switch {
 		case errors.Is(err, service.ErrInvalidOrderItem):
 			respondError(c, response.CodeBadRequest, "error.order_item_invalid", nil)

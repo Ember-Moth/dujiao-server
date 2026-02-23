@@ -11,7 +11,9 @@ type OrderItem struct {
 	ID                           uint           `gorm:"primarykey" json:"id"`                                                   // 主键
 	OrderID                      uint           `gorm:"index;not null" json:"order_id"`                                         // 订单ID
 	ProductID                    uint           `gorm:"index;not null" json:"product_id"`                                       // 商品ID
+	SKUID                        uint           `gorm:"column:sku_id;index;not null;default:0" json:"sku_id"`                   // SKU ID
 	TitleJSON                    JSON           `gorm:"type:json;not null" json:"title"`                                        // 商品标题快照
+	SKUSnapshotJSON              JSON           `gorm:"type:json" json:"sku_snapshot"`                                          // SKU 快照（编码/规格）
 	Tags                         StringArray    `gorm:"type:json" json:"tags"`                                                  // 标签快照
 	UnitPrice                    Money          `gorm:"type:decimal(20,2);not null;default:0" json:"unit_price"`                // 单价
 	Quantity                     int            `gorm:"not null" json:"quantity"`                                               // 数量

@@ -13,6 +13,7 @@ type CartRepository interface {
 	ListByUser(userID uint) ([]models.CartItem, error)
 	Upsert(item *models.CartItem) error
 	DeleteByUserAndProduct(userID, productID uint) error
+	DeleteByUserProductSKU(userID, productID, skuID uint) error
 	ClearByUser(userID uint) error
 	WithTx(tx *gorm.DB) *GormCartRepository
 }
@@ -38,7 +39,7 @@ func (r *GormCartRepository) WithTx(tx *gorm.DB) *GormCartRepository {
 // ListByUser 获取用户购物车项
 func (r *GormCartRepository) ListByUser(userID uint) ([]models.CartItem, error) {
 	var items []models.CartItem
-	if err := r.db.Preload("Product").Where("user_id = ?", userID).Order("updated_at desc").Find(&items).Error; err != nil {
+	if err := r.db.Preload("Product").Preload("SKU").Where("user_id = ?", userID).Order("updated_at desc").Find(&items).Error; err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -50,7 +51,7 @@ func (r *GormCartRepository) Upsert(item *models.CartItem) error {
 		return nil
 	}
 	var existing models.CartItem
-	err := r.db.Where("user_id = ? AND product_id = ?", item.UserID, item.ProductID).First(&existing).Error
+	err := r.db.Where("user_id = ? AND product_id = ? AND sku_id = ?", item.UserID, item.ProductID, item.SKUID).First(&existing).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return r.db.Create(item).Error
 	}
@@ -58,6 +59,7 @@ func (r *GormCartRepository) Upsert(item *models.CartItem) error {
 		return err
 	}
 	updates := map[string]interface{}{
+		"sku_id":           item.SKUID,
 		"quantity":         item.Quantity,
 		"fulfillment_type": item.FulfillmentType,
 		"updated_at":       item.UpdatedAt,
@@ -68,6 +70,14 @@ func (r *GormCartRepository) Upsert(item *models.CartItem) error {
 // DeleteByUserAndProduct 删除购物车项
 func (r *GormCartRepository) DeleteByUserAndProduct(userID, productID uint) error {
 	return r.db.Where("user_id = ? AND product_id = ?", userID, productID).Delete(&models.CartItem{}).Error
+}
+
+// DeleteByUserProductSKU 按用户+商品+SKU删除购物车项
+func (r *GormCartRepository) DeleteByUserProductSKU(userID, productID, skuID uint) error {
+	if skuID == 0 {
+		return r.DeleteByUserAndProduct(userID, productID)
+	}
+	return r.db.Where("user_id = ? AND product_id = ? AND sku_id = ?", userID, productID, skuID).Delete(&models.CartItem{}).Error
 }
 
 // ClearByUser 清空购物车

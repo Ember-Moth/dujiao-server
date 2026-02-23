@@ -28,6 +28,7 @@ type Container struct {
 	CardSecretBatchRepo   repository.CardSecretBatchRepository
 	FulfillmentRepo       repository.FulfillmentRepository
 	ProductRepo           repository.ProductRepository
+	ProductSKURepo        repository.ProductSKURepository
 	CartRepo              repository.CartRepository
 	CouponRepo            repository.CouponRepository
 	CouponUsageRepo       repository.CouponUsageRepository
@@ -112,6 +113,7 @@ func (c *Container) initRepositories() {
 	c.CardSecretBatchRepo = repository.NewCardSecretBatchRepository(db)
 	c.FulfillmentRepo = repository.NewFulfillmentRepository(db)
 	c.ProductRepo = repository.NewProductRepository(db)
+	c.ProductSKURepo = repository.NewProductSKURepository(db)
 	c.CartRepo = repository.NewCartRepository(db)
 	c.CouponRepo = repository.NewCouponRepository(db)
 	c.CouponUsageRepo = repository.NewCouponUsageRepository(db)
@@ -166,18 +168,18 @@ func (c *Container) initServices() {
 	c.TelegramAuthService = service.NewTelegramAuthService(c.Config.TelegramAuth)
 	c.UserAuthService = service.NewUserAuthService(c.Config, c.UserRepo, c.UserOAuthIdentityRepo, c.EmailVerifyCodeRepo, c.EmailService, c.TelegramAuthService)
 	c.UploadService = service.NewUploadService(c.Config)
-	c.ProductService = service.NewProductService(c.ProductRepo)
+	c.ProductService = service.NewProductService(c.ProductRepo, c.ProductSKURepo)
 	c.PostService = service.NewPostService(c.PostRepo)
 	c.CategoryService = service.NewCategoryService(c.CategoryRepo)
-	c.CartService = service.NewCartService(c.CartRepo, c.ProductRepo, c.PromotionRepo, c.SettingService)
+	c.CartService = service.NewCartService(c.CartRepo, c.ProductRepo, c.ProductSKURepo, c.PromotionRepo, c.SettingService)
 	c.WalletService = service.NewWalletService(c.WalletRepo, c.OrderRepo, c.UserRepo)
-	c.OrderService = service.NewOrderService(c.OrderRepo, c.ProductRepo, c.CardSecretRepo, c.CouponRepo, c.CouponUsageRepo, c.PromotionRepo, c.QueueClient, c.SettingService, c.WalletService, c.Config.Order.PaymentExpireMinutes)
+	c.OrderService = service.NewOrderService(c.OrderRepo, c.ProductRepo, c.ProductSKURepo, c.CardSecretRepo, c.CouponRepo, c.CouponUsageRepo, c.PromotionRepo, c.QueueClient, c.SettingService, c.WalletService, c.Config.Order.PaymentExpireMinutes)
 	c.FulfillmentService = service.NewFulfillmentService(c.OrderRepo, c.FulfillmentRepo, c.CardSecretRepo, c.QueueClient)
-	c.CardSecretService = service.NewCardSecretService(c.CardSecretRepo, c.CardSecretBatchRepo, c.ProductRepo)
+	c.CardSecretService = service.NewCardSecretService(c.CardSecretRepo, c.CardSecretBatchRepo, c.ProductRepo, c.ProductSKURepo)
 	c.CouponAdminService = service.NewCouponAdminService(c.CouponRepo)
 	c.PromotionAdminService = service.NewPromotionAdminService(c.PromotionRepo)
 	c.BannerService = service.NewBannerService(c.BannerRepo)
-	c.PaymentService = service.NewPaymentService(c.OrderRepo, c.ProductRepo, c.PaymentRepo, c.PaymentChannelRepo, c.WalletRepo, c.QueueClient, c.WalletService)
+	c.PaymentService = service.NewPaymentService(c.OrderRepo, c.ProductRepo, c.ProductSKURepo, c.PaymentRepo, c.PaymentChannelRepo, c.WalletRepo, c.QueueClient, c.WalletService)
 	c.UserLoginLogService = service.NewUserLoginLogService(c.UserLoginLogRepo)
 	c.AuthzAuditService = service.NewAuthzAuditService(c.AuthzAuditLogRepo)
 	c.DashboardService = service.NewDashboardService(c.DashboardRepo, c.SettingService)

@@ -16,15 +16,16 @@ import (
 // OrderItemRequest 订单项请求
 type OrderItemRequest struct {
 	ProductID       uint   `json:"product_id" binding:"required"`
+	SKUID           uint   `json:"sku_id"`
 	Quantity        int    `json:"quantity" binding:"required"`
 	FulfillmentType string `json:"fulfillment_type"`
 }
 
 // CreateOrderRequest 创建订单请求
 type CreateOrderRequest struct {
-	Items          []OrderItemRequest   `json:"items" binding:"required"`
-	CouponCode     string               `json:"coupon_code"`
-	ManualFormData map[uint]models.JSON `json:"manual_form_data"`
+	Items          []OrderItemRequest     `json:"items" binding:"required"`
+	CouponCode     string                 `json:"coupon_code"`
+	ManualFormData map[string]models.JSON `json:"manual_form_data"`
 }
 
 // PreviewOrder 订单金额预览
@@ -44,6 +45,7 @@ func (h *Handler) PreviewOrder(c *gin.Context) {
 	for _, item := range req.Items {
 		items = append(items, service.CreateOrderItem{
 			ProductID:       item.ProductID,
+			SKUID:           item.SKUID,
 			Quantity:        item.Quantity,
 			FulfillmentType: item.FulfillmentType,
 		})
@@ -58,6 +60,10 @@ func (h *Handler) PreviewOrder(c *gin.Context) {
 	})
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrProductSKURequired):
+			respondError(c, response.CodeBadRequest, "error.order_item_invalid", nil)
+		case errors.Is(err, service.ErrProductSKUInvalid):
+			respondError(c, response.CodeBadRequest, "error.order_item_invalid", nil)
 		case errors.Is(err, service.ErrInvalidOrderItem):
 			respondError(c, response.CodeBadRequest, "error.order_item_invalid", nil)
 		case errors.Is(err, service.ErrInvalidOrderAmount):
@@ -132,6 +138,7 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 	for _, item := range req.Items {
 		items = append(items, service.CreateOrderItem{
 			ProductID:       item.ProductID,
+			SKUID:           item.SKUID,
 			Quantity:        item.Quantity,
 			FulfillmentType: item.FulfillmentType,
 		})
@@ -146,6 +153,10 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 	})
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrProductSKURequired):
+			respondError(c, response.CodeBadRequest, "error.order_item_invalid", nil)
+		case errors.Is(err, service.ErrProductSKUInvalid):
+			respondError(c, response.CodeBadRequest, "error.order_item_invalid", nil)
 		case errors.Is(err, service.ErrInvalidOrderItem):
 			respondError(c, response.CodeBadRequest, "error.order_item_invalid", nil)
 		case errors.Is(err, service.ErrInvalidOrderAmount):

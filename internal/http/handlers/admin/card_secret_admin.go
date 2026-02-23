@@ -15,6 +15,7 @@ import (
 // CreateCardSecretBatchRequest 批量录入卡密请求
 type CreateCardSecretBatchRequest struct {
 	ProductID uint     `json:"product_id" binding:"required"`
+	SKUID     uint     `json:"sku_id"`
 	Secrets   []string `json:"secrets" binding:"required"`
 	BatchNo   string   `json:"batch_no"`
 	Note      string   `json:"note"`
@@ -40,6 +41,7 @@ func (h *Handler) CreateCardSecretBatch(c *gin.Context) {
 
 	batch, created, err := h.CardSecretService.CreateCardSecretBatch(service.CreateCardSecretBatchInput{
 		ProductID: req.ProductID,
+		SKUID:     req.SKUID,
 		Secrets:   req.Secrets,
 		BatchNo:   req.BatchNo,
 		Note:      req.Note,
@@ -48,6 +50,10 @@ func (h *Handler) CreateCardSecretBatch(c *gin.Context) {
 	})
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrProductSKURequired):
+			respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
+		case errors.Is(err, service.ErrProductSKUInvalid):
+			respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
 		case errors.Is(err, service.ErrCardSecretInvalid):
 			respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
 		case errors.Is(err, service.ErrProductNotFound):
@@ -80,6 +86,11 @@ func (h *Handler) ImportCardSecretCSV(c *gin.Context) {
 		respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
 		return
 	}
+	skuID, err := strconv.ParseUint(strings.TrimSpace(c.DefaultPostForm("sku_id", "0")), 10, 64)
+	if err != nil {
+		respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
+		return
+	}
 	file, err := c.FormFile("file")
 	if err != nil {
 		respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
@@ -90,6 +101,7 @@ func (h *Handler) ImportCardSecretCSV(c *gin.Context) {
 
 	batch, created, err := h.CardSecretService.ImportCardSecretCSV(service.ImportCardSecretCSVInput{
 		ProductID: uint(productID),
+		SKUID:     uint(skuID),
 		File:      file,
 		BatchNo:   batchNo,
 		Note:      note,
@@ -97,6 +109,10 @@ func (h *Handler) ImportCardSecretCSV(c *gin.Context) {
 	})
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrProductSKURequired):
+			respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
+		case errors.Is(err, service.ErrProductSKUInvalid):
+			respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
 		case errors.Is(err, service.ErrCardSecretInvalid):
 			respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
 		case errors.Is(err, service.ErrProductNotFound):
@@ -130,6 +146,16 @@ func (h *Handler) GetCardSecrets(c *gin.Context) {
 		}
 		productID = parsed
 	}
+	var skuID uint64
+	rawSKUID := strings.TrimSpace(c.Query("sku_id"))
+	if rawSKUID != "" {
+		parsed, err := strconv.ParseUint(rawSKUID, 10, 64)
+		if err != nil {
+			respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
+			return
+		}
+		skuID = parsed
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	page, pageSize = normalizePagination(page, pageSize)
@@ -137,12 +163,17 @@ func (h *Handler) GetCardSecrets(c *gin.Context) {
 
 	items, total, err := h.CardSecretService.ListCardSecrets(service.ListCardSecretInput{
 		ProductID: uint(productID),
+		SKUID:     uint(skuID),
 		Status:    status,
 		Page:      page,
 		PageSize:  pageSize,
 	})
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrProductSKURequired):
+			respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
+		case errors.Is(err, service.ErrProductSKUInvalid):
+			respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
 		case errors.Is(err, service.ErrCardSecretInvalid):
 			respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
 		default:
@@ -212,9 +243,18 @@ func (h *Handler) GetCardSecretStats(c *gin.Context) {
 		respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
 		return
 	}
-	stats, err := h.CardSecretService.GetStats(uint(productID))
+	skuID, err := strconv.ParseUint(strings.TrimSpace(c.DefaultQuery("sku_id", "0")), 10, 64)
+	if err != nil {
+		respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
+		return
+	}
+	stats, err := h.CardSecretService.GetStats(uint(productID), uint(skuID))
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrProductSKURequired):
+			respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
+		case errors.Is(err, service.ErrProductSKUInvalid):
+			respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
 		case errors.Is(err, service.ErrCardSecretInvalid):
 			respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
 		default:
@@ -235,10 +275,19 @@ func (h *Handler) GetCardSecretBatches(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	page, pageSize = normalizePagination(page, pageSize)
+	skuID, err := strconv.ParseUint(strings.TrimSpace(c.DefaultQuery("sku_id", "0")), 10, 64)
+	if err != nil {
+		respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
+		return
+	}
 
-	items, total, err := h.CardSecretService.ListBatches(uint(productID), page, pageSize)
+	items, total, err := h.CardSecretService.ListBatches(uint(productID), uint(skuID), page, pageSize)
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrProductSKURequired):
+			respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
+		case errors.Is(err, service.ErrProductSKUInvalid):
+			respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
 		case errors.Is(err, service.ErrCardSecretInvalid):
 			respondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
 		default:

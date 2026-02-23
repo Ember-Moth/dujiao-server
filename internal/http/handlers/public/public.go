@@ -190,7 +190,7 @@ func (h *Handler) GetProductBySlug(c *gin.Context) {
 	}
 	autoStockMap := make(map[uint]int64)
 	if h.CardSecretRepo != nil && strings.TrimSpace(product.FulfillmentType) == constants.FulfillmentTypeAuto {
-		count, countErr := h.CardSecretRepo.CountAvailable(product.ID)
+		count, countErr := h.CardSecretRepo.CountAvailable(product.ID, 0)
 		if countErr != nil {
 			respondError(c, response.CodeInternal, "error.product_fetch_failed", countErr)
 			return
@@ -354,12 +354,12 @@ func (h *Handler) GetCategories(c *gin.Context) {
 
 // CreateGuestOrderRequest 游客下单请求
 type CreateGuestOrderRequest struct {
-	Email          string                `json:"email" binding:"required"`
-	OrderPassword  string                `json:"order_password" binding:"required"`
-	Items          []OrderItemRequest    `json:"items" binding:"required"`
-	CouponCode     string                `json:"coupon_code"`
-	ManualFormData map[uint]models.JSON  `json:"manual_form_data"`
-	CaptchaPayload CaptchaPayloadRequest `json:"captcha_payload"`
+	Email          string                 `json:"email" binding:"required"`
+	OrderPassword  string                 `json:"order_password" binding:"required"`
+	Items          []OrderItemRequest     `json:"items" binding:"required"`
+	CouponCode     string                 `json:"coupon_code"`
+	ManualFormData map[string]models.JSON `json:"manual_form_data"`
+	CaptchaPayload CaptchaPayloadRequest  `json:"captcha_payload"`
 }
 
 // CreateGuestOrder 游客创建订单
@@ -391,6 +391,7 @@ func (h *Handler) CreateGuestOrder(c *gin.Context) {
 	for _, item := range req.Items {
 		items = append(items, service.CreateOrderItem{
 			ProductID:       item.ProductID,
+			SKUID:           item.SKUID,
 			Quantity:        item.Quantity,
 			FulfillmentType: item.FulfillmentType,
 		})
@@ -406,6 +407,10 @@ func (h *Handler) CreateGuestOrder(c *gin.Context) {
 	})
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrProductSKURequired):
+			respondError(c, response.CodeBadRequest, "error.order_item_invalid", nil)
+		case errors.Is(err, service.ErrProductSKUInvalid):
+			respondError(c, response.CodeBadRequest, "error.order_item_invalid", nil)
 		case errors.Is(err, service.ErrGuestEmailRequired):
 			respondError(c, response.CodeBadRequest, "error.guest_email_required", nil)
 		case errors.Is(err, service.ErrGuestPasswordRequired):
@@ -461,6 +466,7 @@ func (h *Handler) PreviewGuestOrder(c *gin.Context) {
 	for _, item := range req.Items {
 		items = append(items, service.CreateOrderItem{
 			ProductID:       item.ProductID,
+			SKUID:           item.SKUID,
 			Quantity:        item.Quantity,
 			FulfillmentType: item.FulfillmentType,
 		})
@@ -476,6 +482,10 @@ func (h *Handler) PreviewGuestOrder(c *gin.Context) {
 	})
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrProductSKURequired):
+			respondError(c, response.CodeBadRequest, "error.order_item_invalid", nil)
+		case errors.Is(err, service.ErrProductSKUInvalid):
+			respondError(c, response.CodeBadRequest, "error.order_item_invalid", nil)
 		case errors.Is(err, service.ErrGuestEmailRequired):
 			respondError(c, response.CodeBadRequest, "error.guest_email_required", nil)
 		case errors.Is(err, service.ErrGuestPasswordRequired):

@@ -11,18 +11,19 @@ import (
 
 func TestMergeCreateOrderItems(t *testing.T) {
 	items := []CreateOrderItem{
-		{ProductID: 1, Quantity: 1, FulfillmentType: "auto"},
-		{ProductID: 1, Quantity: 2, FulfillmentType: "auto"},
-		{ProductID: 2, Quantity: 1, FulfillmentType: ""},
+		{ProductID: 1, SKUID: 10, Quantity: 1, FulfillmentType: "auto"},
+		{ProductID: 1, SKUID: 10, Quantity: 2, FulfillmentType: "auto"},
+		{ProductID: 1, SKUID: 11, Quantity: 1, FulfillmentType: "auto"},
+		{ProductID: 2, SKUID: 20, Quantity: 1, FulfillmentType: ""},
 	}
 	merged, err := mergeCreateOrderItems(items)
 	if err != nil {
 		t.Fatalf("mergeCreateOrderItems error: %v", err)
 	}
-	if len(merged) != 2 {
-		t.Fatalf("expected 2 items, got %d", len(merged))
+	if len(merged) != 3 {
+		t.Fatalf("expected 3 items, got %d", len(merged))
 	}
-	if merged[0].ProductID != 1 || merged[0].Quantity != 3 {
+	if merged[0].ProductID != 1 || merged[0].SKUID != 10 || merged[0].Quantity != 3 {
 		t.Fatalf("unexpected merged item: %+v", merged[0])
 	}
 	if merged[0].FulfillmentType != "" {
@@ -32,14 +33,14 @@ func TestMergeCreateOrderItems(t *testing.T) {
 
 func TestMergeCreateOrderItemsConflict(t *testing.T) {
 	items := []CreateOrderItem{
-		{ProductID: 1, Quantity: 1, FulfillmentType: "auto"},
-		{ProductID: 1, Quantity: 1, FulfillmentType: "manual"},
+		{ProductID: 1, SKUID: 10, Quantity: 1, FulfillmentType: "auto"},
+		{ProductID: 1, SKUID: 11, Quantity: 1, FulfillmentType: "manual"},
 	}
 	merged, err := mergeCreateOrderItems(items)
 	if err != nil {
 		t.Fatalf("expected no error for conflicting fulfillment type input, got: %v", err)
 	}
-	if len(merged) != 1 || merged[0].Quantity != 2 {
+	if len(merged) != 2 {
 		t.Fatalf("unexpected merged result: %+v", merged)
 	}
 }
@@ -65,6 +66,27 @@ func TestApplyCouponDiscountToItems(t *testing.T) {
 	}
 	if !plans[2].CouponDiscount.Equal(decimal.Zero) {
 		t.Fatalf("expected 0, got %s", plans[2].CouponDiscount.String())
+	}
+}
+
+func TestResolveManualFormSubmissionPreferOrderItemKey(t *testing.T) {
+	data := map[string]models.JSON{
+		"1":    {"legacy": "legacy"},
+		"1:10": {"current": "current"},
+	}
+	got := resolveManualFormSubmission(data, 1, 10)
+	if got["current"] != "current" {
+		t.Fatalf("expected order item key value, got: %+v", got)
+	}
+}
+
+func TestResolveManualFormSubmissionFallbackLegacyProductKey(t *testing.T) {
+	data := map[string]models.JSON{
+		"1": {"legacy": "legacy"},
+	}
+	got := resolveManualFormSubmission(data, 1, 99)
+	if got["legacy"] != "legacy" {
+		t.Fatalf("expected legacy product key value, got: %+v", got)
 	}
 }
 

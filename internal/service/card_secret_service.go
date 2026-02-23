@@ -20,23 +20,26 @@ import (
 
 // CardSecretService 卡密库存服务
 type CardSecretService struct {
-	secretRepo  repository.CardSecretRepository
-	batchRepo   repository.CardSecretBatchRepository
-	productRepo repository.ProductRepository
+	secretRepo     repository.CardSecretRepository
+	batchRepo      repository.CardSecretBatchRepository
+	productRepo    repository.ProductRepository
+	productSKURepo repository.ProductSKURepository
 }
 
 // NewCardSecretService 创建卡密库存服务
-func NewCardSecretService(secretRepo repository.CardSecretRepository, batchRepo repository.CardSecretBatchRepository, productRepo repository.ProductRepository) *CardSecretService {
+func NewCardSecretService(secretRepo repository.CardSecretRepository, batchRepo repository.CardSecretBatchRepository, productRepo repository.ProductRepository, productSKURepo repository.ProductSKURepository) *CardSecretService {
 	return &CardSecretService{
-		secretRepo:  secretRepo,
-		batchRepo:   batchRepo,
-		productRepo: productRepo,
+		secretRepo:     secretRepo,
+		batchRepo:      batchRepo,
+		productRepo:    productRepo,
+		productSKURepo: productSKURepo,
 	}
 }
 
 // CreateCardSecretBatchInput 批量录入卡密输入
 type CreateCardSecretBatchInput struct {
 	ProductID uint
+	SKUID     uint
 	Secrets   []string
 	BatchNo   string
 	Note      string
@@ -60,6 +63,10 @@ func (s *CardSecretService) CreateCardSecretBatch(input CreateCardSecretBatchInp
 	if product == nil {
 		return nil, 0, ErrProductNotFound
 	}
+	sku, err := s.resolveCardSecretSKU(product.ID, input.SKUID)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	normalized := normalizeSecrets(input.Secrets)
 	if len(normalized) == 0 {
@@ -81,6 +88,7 @@ func (s *CardSecretService) CreateCardSecretBatch(input CreateCardSecretBatchInp
 	now := time.Now()
 	batch := &models.CardSecretBatch{
 		ProductID:  input.ProductID,
+		SKUID:      sku.ID,
 		BatchNo:    batchNo,
 		Source:     source,
 		TotalCount: len(normalized),
@@ -102,6 +110,7 @@ func (s *CardSecretService) CreateCardSecretBatch(input CreateCardSecretBatchInp
 		for _, secret := range normalized {
 			items = append(items, models.CardSecret{
 				ProductID: input.ProductID,
+				SKUID:     sku.ID,
 				BatchID:   &batch.ID,
 				Secret:    secret,
 				Status:    models.CardSecretStatusAvailable,
@@ -126,6 +135,7 @@ func (s *CardSecretService) CreateCardSecretBatch(input CreateCardSecretBatchInp
 // ImportCardSecretCSVInput 导入 CSV 输入
 type ImportCardSecretCSVInput struct {
 	ProductID uint
+	SKUID     uint
 	File      *multipart.FileHeader
 	BatchNo   string
 	Note      string
@@ -150,6 +160,7 @@ func (s *CardSecretService) ImportCardSecretCSV(input ImportCardSecretCSVInput) 
 	}
 	return s.CreateCardSecretBatch(CreateCardSecretBatchInput{
 		ProductID: input.ProductID,
+		SKUID:     input.SKUID,
 		Secrets:   secrets,
 		BatchNo:   input.BatchNo,
 		Note:      input.Note,
@@ -161,6 +172,7 @@ func (s *CardSecretService) ImportCardSecretCSV(input ImportCardSecretCSVInput) 
 // ListCardSecretInput 卡密列表输入
 type ListCardSecretInput struct {
 	ProductID uint
+	SKUID     uint
 	Status    string
 	Page      int
 	PageSize  int
@@ -168,6 +180,15 @@ type ListCardSecretInput struct {
 
 // ListCardSecrets 获取卡密列表
 func (s *CardSecretService) ListCardSecrets(input ListCardSecretInput) ([]models.CardSecret, int64, error) {
+	if input.SKUID > 0 && input.ProductID == 0 {
+		return nil, 0, ErrCardSecretInvalid
+	}
+	if input.ProductID > 0 && input.SKUID > 0 {
+		if _, err := s.resolveCardSecretSKU(input.ProductID, input.SKUID); err != nil {
+			return nil, 0, err
+		}
+	}
+
 	status := strings.TrimSpace(input.Status)
 	var (
 		items []models.CardSecret
@@ -177,7 +198,7 @@ func (s *CardSecretService) ListCardSecrets(input ListCardSecretInput) ([]models
 	if input.ProductID == 0 {
 		items, total, err = s.secretRepo.ListAll(status, input.Page, input.PageSize)
 	} else {
-		items, total, err = s.secretRepo.ListByProduct(input.ProductID, status, input.Page, input.PageSize)
+		items, total, err = s.secretRepo.ListByProduct(input.ProductID, input.SKUID, status, input.Page, input.PageSize)
 	}
 	if err != nil {
 		return nil, 0, ErrCardSecretFetchFailed
@@ -226,15 +247,20 @@ type CardSecretStats struct {
 }
 
 // GetStats 获取库存统计
-func (s *CardSecretService) GetStats(productID uint) (*CardSecretStats, error) {
+func (s *CardSecretService) GetStats(productID, skuID uint) (*CardSecretStats, error) {
 	if productID == 0 {
 		return nil, ErrCardSecretInvalid
 	}
-	total, available, used, err := s.secretRepo.CountByProduct(productID)
+	if skuID > 0 {
+		if _, err := s.resolveCardSecretSKU(productID, skuID); err != nil {
+			return nil, err
+		}
+	}
+	total, available, used, err := s.secretRepo.CountByProduct(productID, skuID)
 	if err != nil {
 		return nil, ErrCardSecretStatsFailed
 	}
-	reserved, err := s.secretRepo.CountReserved(productID)
+	reserved, err := s.secretRepo.CountReserved(productID, skuID)
 	if err != nil {
 		return nil, ErrCardSecretStatsFailed
 	}
@@ -247,18 +273,56 @@ func (s *CardSecretService) GetStats(productID uint) (*CardSecretStats, error) {
 }
 
 // ListBatches 获取批次列表
-func (s *CardSecretService) ListBatches(productID uint, page, pageSize int) ([]models.CardSecretBatch, int64, error) {
+func (s *CardSecretService) ListBatches(productID, skuID uint, page, pageSize int) ([]models.CardSecretBatch, int64, error) {
 	if productID == 0 {
 		return nil, 0, ErrCardSecretInvalid
+	}
+	if skuID > 0 {
+		if _, err := s.resolveCardSecretSKU(productID, skuID); err != nil {
+			return nil, 0, err
+		}
 	}
 	if s.batchRepo == nil {
 		return nil, 0, ErrCardSecretBatchFetchFailed
 	}
-	items, total, err := s.batchRepo.ListByProduct(productID, page, pageSize)
+	items, total, err := s.batchRepo.ListByProduct(productID, skuID, page, pageSize)
 	if err != nil {
 		return nil, 0, ErrCardSecretBatchFetchFailed
 	}
 	return items, total, nil
+}
+
+func (s *CardSecretService) resolveCardSecretSKU(productID, rawSKUID uint) (*models.ProductSKU, error) {
+	if productID == 0 || s.productSKURepo == nil {
+		return nil, ErrProductSKUInvalid
+	}
+	if rawSKUID > 0 {
+		sku, err := s.productSKURepo.GetByID(rawSKUID)
+		if err != nil {
+			return nil, err
+		}
+		if sku == nil || sku.ProductID != productID {
+			return nil, ErrProductSKUInvalid
+		}
+		return sku, nil
+	}
+
+	defaultSKU, err := s.productSKURepo.GetByProductAndCode(productID, models.DefaultSKUCode)
+	if err != nil {
+		return nil, err
+	}
+	if defaultSKU != nil {
+		return defaultSKU, nil
+	}
+
+	skus, err := s.productSKURepo.ListByProduct(productID, false)
+	if err != nil {
+		return nil, err
+	}
+	if len(skus) == 1 {
+		return &skus[0], nil
+	}
+	return nil, ErrProductSKURequired
 }
 
 func normalizeSecrets(values []string) []string {

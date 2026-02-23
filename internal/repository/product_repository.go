@@ -95,6 +95,13 @@ func (r *GormProductRepository) GetBySlug(slug string, onlyActive bool) (*models
 	query := r.db.Preload("Category").Where("slug = ?", slug)
 	if onlyActive {
 		query = query.Where("is_active = ?", true)
+		query = query.Preload("SKUs", func(db *gorm.DB) *gorm.DB {
+			return db.Where("is_active = ?", true).Order("sort_order DESC, id ASC")
+		})
+	} else {
+		query = query.Preload("SKUs", func(db *gorm.DB) *gorm.DB {
+			return db.Order("sort_order DESC, id ASC")
+		})
 	}
 
 	var product models.Product
@@ -110,7 +117,11 @@ func (r *GormProductRepository) GetBySlug(slug string, onlyActive bool) (*models
 // GetByID 根据 ID 获取商品
 func (r *GormProductRepository) GetByID(id string) (*models.Product, error) {
 	var product models.Product
-	if err := r.db.Preload("Category").First(&product, id).Error; err != nil {
+	if err := r.db.Preload("Category").
+		Preload("SKUs", func(db *gorm.DB) *gorm.DB {
+			return db.Order("sort_order DESC, id ASC")
+		}).
+		First(&product, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}

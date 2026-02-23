@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -12,19 +13,22 @@ import (
 
 // CartItemDetail 购物车项详情（用于响应）
 type CartItemDetail struct {
-	ProductID       uint            `json:"product_id"`
-	Quantity        int             `json:"quantity"`
-	FulfillmentType string          `json:"fulfillment_type"`
-	UnitPrice       models.Money    `json:"unit_price"`
-	OriginalPrice   models.Money    `json:"original_price"`
-	Currency        string          `json:"currency"`
-	Product         *models.Product `json:"product"`
+	ProductID       uint               `json:"product_id"`
+	SKUID           uint               `json:"sku_id"`
+	Quantity        int                `json:"quantity"`
+	FulfillmentType string             `json:"fulfillment_type"`
+	UnitPrice       models.Money       `json:"unit_price"`
+	OriginalPrice   models.Money       `json:"original_price"`
+	Currency        string             `json:"currency"`
+	Product         *models.Product    `json:"product"`
+	SKU             *models.ProductSKU `json:"sku"`
 }
 
 // UpsertCartItemInput 购物车更新输入
 type UpsertCartItemInput struct {
 	UserID          uint
 	ProductID       uint
+	SKUID           uint
 	Quantity        int
 	FulfillmentType string
 }
@@ -33,15 +37,17 @@ type UpsertCartItemInput struct {
 type CartService struct {
 	cartRepo       repository.CartRepository
 	productRepo    repository.ProductRepository
+	productSKURepo repository.ProductSKURepository
 	promotionRepo  repository.PromotionRepository
 	settingService *SettingService
 }
 
 // NewCartService 创建购物车服务
-func NewCartService(cartRepo repository.CartRepository, productRepo repository.ProductRepository, promotionRepo repository.PromotionRepository, settingService *SettingService) *CartService {
+func NewCartService(cartRepo repository.CartRepository, productRepo repository.ProductRepository, productSKURepo repository.ProductSKURepository, promotionRepo repository.PromotionRepository, settingService *SettingService) *CartService {
 	return &CartService{
 		cartRepo:       cartRepo,
 		productRepo:    productRepo,
+		productSKURepo: productSKURepo,
 		promotionRepo:  promotionRepo,
 		settingService: settingService,
 	}
@@ -69,13 +75,36 @@ func (s *CartService) ListByUser(userID uint) ([]CartItemDetail, error) {
 			product = p
 		}
 		if product == nil || !product.IsActive {
-			_ = s.cartRepo.DeleteByUserAndProduct(userID, item.ProductID)
+			_ = s.cartRepo.DeleteByUserProductSKU(userID, item.ProductID, item.SKUID)
 			continue
 		}
 
-		unitPrice := product.PriceAmount
+		sku := item.SKU
+		if sku == nil || sku.ID == 0 {
+			resolvedSKU, resolveErr := s.resolveOrderSKU(product, item.SKUID)
+			if resolveErr != nil {
+				_ = s.cartRepo.DeleteByUserProductSKU(userID, item.ProductID, item.SKUID)
+				continue
+			}
+			sku = resolvedSKU
+		}
+
+		if sku == nil || !sku.IsActive {
+			_ = s.cartRepo.DeleteByUserProductSKU(userID, item.ProductID, item.SKUID)
+			continue
+		}
+		if strings.TrimSpace(product.FulfillmentType) == constants.FulfillmentTypeManual &&
+			shouldEnforceManualSKUStock(product, sku) &&
+			manualSKUAvailable(sku) <= 0 {
+			_ = s.cartRepo.DeleteByUserProductSKU(userID, item.ProductID, item.SKUID)
+			continue
+		}
+
+		priceCarrier := *product
+		priceCarrier.PriceAmount = sku.PriceAmount
+		unitPrice := sku.PriceAmount
 		if promotionService != nil {
-			_, discounted, err := promotionService.ApplyPromotion(product, item.Quantity)
+			_, discounted, err := promotionService.ApplyPromotion(&priceCarrier, item.Quantity)
 			if err != nil {
 				return nil, err
 			}
@@ -89,12 +118,14 @@ func (s *CartService) ListByUser(userID uint) ([]CartItemDetail, error) {
 
 		details = append(details, CartItemDetail{
 			ProductID:       item.ProductID,
+			SKUID:           sku.ID,
 			Quantity:        item.Quantity,
 			FulfillmentType: fulfillmentType,
 			UnitPrice:       unitPrice,
-			OriginalPrice:   product.PriceAmount,
+			OriginalPrice:   sku.PriceAmount,
 			Currency:        currency,
 			Product:         product,
+			SKU:             sku,
 		})
 	}
 	return details, nil
@@ -112,6 +143,10 @@ func (s *CartService) UpsertItem(input UpsertCartItemInput) error {
 	if product == nil || !product.IsActive {
 		return ErrProductNotAvailable
 	}
+	sku, err := s.resolveOrderSKU(product, input.SKUID)
+	if err != nil {
+		return err
+	}
 
 	fulfillmentType := strings.TrimSpace(product.FulfillmentType)
 	if fulfillmentType == "" {
@@ -120,11 +155,17 @@ func (s *CartService) UpsertItem(input UpsertCartItemInput) error {
 	if fulfillmentType != constants.FulfillmentTypeManual && fulfillmentType != constants.FulfillmentTypeAuto {
 		return ErrFulfillmentInvalid
 	}
+	if fulfillmentType == constants.FulfillmentTypeManual &&
+		shouldEnforceManualSKUStock(product, sku) &&
+		manualSKUAvailable(sku) < input.Quantity {
+		return ErrManualStockInsufficient
+	}
 
 	now := time.Now()
 	item := &models.CartItem{
 		UserID:          input.UserID,
 		ProductID:       input.ProductID,
+		SKUID:           sku.ID,
 		Quantity:        input.Quantity,
 		FulfillmentType: fulfillmentType,
 		CreatedAt:       now,
@@ -134,11 +175,11 @@ func (s *CartService) UpsertItem(input UpsertCartItemInput) error {
 }
 
 // RemoveItem 删除购物车项
-func (s *CartService) RemoveItem(userID, productID uint) error {
+func (s *CartService) RemoveItem(userID, productID, skuID uint) error {
 	if userID == 0 || productID == 0 {
 		return ErrInvalidOrderItem
 	}
-	return s.cartRepo.DeleteByUserAndProduct(userID, productID)
+	return s.cartRepo.DeleteByUserProductSKU(userID, productID, skuID)
 }
 
 func (s *CartService) resolveSiteCurrency() string {
@@ -150,4 +191,41 @@ func (s *CartService) resolveSiteCurrency() string {
 		return constants.SiteCurrencyDefault
 	}
 	return normalizeSiteCurrency(currency)
+}
+
+func (s *CartService) resolveOrderSKU(product *models.Product, rawSKUID uint) (*models.ProductSKU, error) {
+	if product == nil || product.ID == 0 {
+		return nil, ErrProductNotAvailable
+	}
+	if s.productSKURepo == nil {
+		return nil, ErrProductSKUInvalid
+	}
+
+	if rawSKUID > 0 {
+		sku, err := s.productSKURepo.GetByID(rawSKUID)
+		if err != nil {
+			return nil, err
+		}
+		if sku == nil || sku.ProductID != product.ID || !sku.IsActive {
+			return nil, ErrProductSKUInvalid
+		}
+		return sku, nil
+	}
+
+	// 兼容窗口：仅当商品只有一个启用 SKU 时允许缺省 sku_id 自动回退。
+	activeSKUs, err := s.productSKURepo.ListByProduct(product.ID, true)
+	if err != nil {
+		return nil, err
+	}
+	if len(activeSKUs) == 1 {
+		return &activeSKUs[0], nil
+	}
+	if len(activeSKUs) == 0 {
+		return nil, ErrProductSKUInvalid
+	}
+	return nil, ErrProductSKURequired
+}
+
+func buildOrderItemKey(productID, skuID uint) string {
+	return fmt.Sprintf("%d:%d", productID, skuID)
 }

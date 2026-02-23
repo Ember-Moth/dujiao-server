@@ -24,6 +24,7 @@ import (
 type OrderService struct {
 	orderRepo       repository.OrderRepository
 	productRepo     repository.ProductRepository
+	productSKURepo  repository.ProductSKURepository
 	cardSecretRepo  repository.CardSecretRepository
 	couponRepo      repository.CouponRepository
 	couponUsageRepo repository.CouponUsageRepository
@@ -35,10 +36,11 @@ type OrderService struct {
 }
 
 // NewOrderService 创建订单服务
-func NewOrderService(orderRepo repository.OrderRepository, productRepo repository.ProductRepository, cardSecretRepo repository.CardSecretRepository, couponRepo repository.CouponRepository, couponUsageRepo repository.CouponUsageRepository, promotionRepo repository.PromotionRepository, queueClient *queue.Client, settingService *SettingService, walletService *WalletService, expireMinutes int) *OrderService {
+func NewOrderService(orderRepo repository.OrderRepository, productRepo repository.ProductRepository, productSKURepo repository.ProductSKURepository, cardSecretRepo repository.CardSecretRepository, couponRepo repository.CouponRepository, couponUsageRepo repository.CouponUsageRepository, promotionRepo repository.PromotionRepository, queueClient *queue.Client, settingService *SettingService, walletService *WalletService, expireMinutes int) *OrderService {
 	return &OrderService{
 		orderRepo:       orderRepo,
 		productRepo:     productRepo,
+		productSKURepo:  productSKURepo,
 		cardSecretRepo:  cardSecretRepo,
 		couponRepo:      couponRepo,
 		couponUsageRepo: couponUsageRepo,
@@ -56,7 +58,7 @@ type CreateOrderInput struct {
 	Items          []CreateOrderItem
 	CouponCode     string
 	ClientIP       string
-	ManualFormData map[uint]models.JSON
+	ManualFormData map[string]models.JSON
 }
 
 // CreateGuestOrderInput 游客创建订单输入
@@ -67,12 +69,13 @@ type CreateGuestOrderInput struct {
 	Items          []CreateOrderItem
 	CouponCode     string
 	ClientIP       string
-	ManualFormData map[uint]models.JSON
+	ManualFormData map[string]models.JSON
 }
 
 // CreateOrderItem 创建订单项输入
 type CreateOrderItem struct {
 	ProductID       uint
+	SKUID           uint
 	Quantity        int
 	FulfillmentType string
 }
@@ -80,6 +83,7 @@ type CreateOrderItem struct {
 // childOrderPlan 子订单计划数据
 type childOrderPlan struct {
 	Product           *models.Product
+	SKU               *models.ProductSKU
 	Item              models.OrderItem
 	TotalAmount       decimal.Decimal
 	PromotionDiscount decimal.Decimal
@@ -157,7 +161,7 @@ type orderCreateParams struct {
 	CouponCode     string
 	ClientIP       string
 	IsGuest        bool
-	ManualFormData map[uint]models.JSON
+	ManualFormData map[string]models.JSON
 }
 
 // OrderPreview 订单金额预览
@@ -173,7 +177,9 @@ type OrderPreview struct {
 // OrderPreviewItem 订单项金额预览
 type OrderPreviewItem struct {
 	ProductID         uint               `json:"product_id"`
+	SKUID             uint               `json:"sku_id"`
 	TitleJSON         models.JSON        `json:"title"`
+	SKUSnapshotJSON   models.JSON        `json:"sku_snapshot"`
 	Tags              models.StringArray `json:"tags"`
 	UnitPrice         models.Money       `json:"unit_price"`
 	Quantity          int                `json:"quantity"`
@@ -233,7 +239,9 @@ func (s *OrderService) previewOrder(input orderCreateParams) (*OrderPreview, err
 		item := plan.Item
 		items = append(items, OrderPreviewItem{
 			ProductID:         item.ProductID,
+			SKUID:             item.SKUID,
 			TitleJSON:         item.TitleJSON,
+			SKUSnapshotJSON:   item.SKUSnapshotJSON,
 			Tags:              item.Tags,
 			UnitPrice:         item.UnitPrice,
 			Quantity:          item.Quantity,
@@ -264,6 +272,9 @@ func (s *OrderService) createOrder(input orderCreateParams) (*models.Order, erro
 
 	if len(input.Items) == 0 {
 		return nil, ErrInvalidOrderItem
+	}
+	if s.productSKURepo == nil {
+		return nil, ErrProductSKUInvalid
 	}
 	if input.IsGuest && input.GuestEmail == "" {
 		return nil, ErrGuestEmailRequired
@@ -304,7 +315,10 @@ func (s *OrderService) createOrder(input orderCreateParams) (*models.Order, erro
 
 	err = models.DB.Transaction(func(tx *gorm.DB) error {
 		orderRepo := s.orderRepo.WithTx(tx)
-		productRepo := s.productRepo.WithTx(tx)
+		var productSKURepo repository.ProductSKURepository
+		if s.productSKURepo != nil {
+			productSKURepo = s.productSKURepo.WithTx(tx)
+		}
 		if err := orderRepo.Create(order, nil); err != nil {
 			return err
 		}
@@ -347,7 +361,7 @@ func (s *OrderService) createOrder(input orderCreateParams) (*models.Order, erro
 				}
 				secretRepo := s.cardSecretRepo.WithTx(tx)
 				var rows []models.CardSecret
-				if err := tx.Where("product_id = ? AND status = ?", plan.Item.ProductID, models.CardSecretStatusAvailable).
+				if err := tx.Where("product_id = ? AND sku_id = ? AND status = ?", plan.Item.ProductID, plan.Item.SKUID, models.CardSecretStatusAvailable).
 					Order("id asc").Limit(plan.Item.Quantity).Find(&rows).Error; err != nil {
 					return err
 				}
@@ -366,8 +380,10 @@ func (s *OrderService) createOrder(input orderCreateParams) (*models.Order, erro
 					return ErrCardSecretInsufficient
 				}
 			}
-			if strings.TrimSpace(plan.Item.FulfillmentType) == constants.FulfillmentTypeManual && plan.Product != nil && plan.Product.ManualStockTotal > 0 {
-				affected, err := productRepo.ReserveManualStock(plan.Item.ProductID, plan.Item.Quantity)
+			if strings.TrimSpace(plan.Item.FulfillmentType) == constants.FulfillmentTypeManual &&
+				plan.SKU != nil &&
+				shouldEnforceManualSKUStock(plan.Product, plan.SKU) {
+				affected, err := productSKURepo.ReserveManualStock(plan.Item.SKUID, plan.Item.Quantity)
 				if err != nil {
 					return err
 				}
@@ -477,7 +493,7 @@ func (s *OrderService) buildOrderResult(input orderCreateParams) (*orderBuildRes
 	promotionService := NewPromotionService(s.promotionRepo)
 	manualFormData := input.ManualFormData
 	if manualFormData == nil {
-		manualFormData = map[uint]models.JSON{}
+		manualFormData = map[string]models.JSON{}
 	}
 	for _, item := range mergedItems {
 		if item.ProductID == 0 || item.Quantity <= 0 {
@@ -497,8 +513,15 @@ func (s *OrderService) buildOrderResult(input orderCreateParams) (*orderBuildRes
 		if input.IsGuest && purchaseType == constants.ProductPurchaseMember {
 			return nil, ErrProductPurchaseNotAllowed
 		}
+		sku, err := s.resolveOrderSKU(product, item.SKUID)
+		if err != nil {
+			return nil, err
+		}
+
 		productCurrency := currency
-		promotion, unitPrice, err := promotionService.ApplyPromotion(product, item.Quantity)
+		priceCarrier := *product
+		priceCarrier.PriceAmount = sku.PriceAmount
+		promotion, unitPrice, err := promotionService.ApplyPromotion(&priceCarrier, item.Quantity)
 		if err != nil {
 			return nil, err
 		}
@@ -507,7 +530,7 @@ func (s *OrderService) buildOrderResult(input orderCreateParams) (*orderBuildRes
 			return nil, ErrProductPriceInvalid
 		}
 
-		basePrice := product.PriceAmount.Decimal.Round(2)
+		basePrice := sku.PriceAmount.Decimal.Round(2)
 		promotionDiscount := decimal.Zero
 		if promotion != nil && basePrice.GreaterThan(unitPriceAmount) {
 			promotionDiscount = basePrice.Sub(unitPriceAmount).
@@ -525,17 +548,17 @@ func (s *OrderService) buildOrderResult(input orderCreateParams) (*orderBuildRes
 		if fulfillmentType != constants.FulfillmentTypeManual && fulfillmentType != constants.FulfillmentTypeAuto {
 			return nil, ErrFulfillmentInvalid
 		}
-		if fulfillmentType == constants.FulfillmentTypeManual && product.ManualStockTotal > 0 {
-			available := product.ManualStockTotal - product.ManualStockLocked - product.ManualStockSold
-			if available < item.Quantity {
-				return nil, ErrManualStockInsufficient
-			}
+		if fulfillmentType == constants.FulfillmentTypeManual &&
+			shouldEnforceManualSKUStock(product, sku) &&
+			manualSKUAvailable(sku) < item.Quantity {
+			return nil, ErrManualStockInsufficient
 		}
 
 		manualSchemaSnapshot := models.JSON{}
 		manualSubmission := models.JSON{}
 		if fulfillmentType == constants.FulfillmentTypeManual {
-			normalizedSchema, normalizedSubmission, err := validateAndNormalizeManualForm(product.ManualFormSchemaJSON, manualFormData[item.ProductID])
+			submission := resolveManualFormSubmission(manualFormData, product.ID, sku.ID)
+			normalizedSchema, normalizedSubmission, err := validateAndNormalizeManualForm(product.ManualFormSchemaJSON, submission)
 			if err != nil {
 				return nil, err
 			}
@@ -558,8 +581,14 @@ func (s *OrderService) buildOrderResult(input orderCreateParams) (*orderBuildRes
 		}
 
 		orderItem := models.OrderItem{
-			ProductID:                    product.ID,
-			TitleJSON:                    product.TitleJSON,
+			ProductID: product.ID,
+			SKUID:     sku.ID,
+			TitleJSON: product.TitleJSON,
+			SKUSnapshotJSON: models.JSON{
+				"sku_id":      sku.ID,
+				"sku_code":    sku.SKUCode,
+				"spec_values": sku.SpecValuesJSON,
+			},
 			Tags:                         product.Tags,
 			UnitPrice:                    models.NewMoneyFromDecimal(unitPriceAmount),
 			Quantity:                     item.Quantity,
@@ -576,6 +605,7 @@ func (s *OrderService) buildOrderResult(input orderCreateParams) (*orderBuildRes
 		orderItems = append(orderItems, orderItem)
 		plans = append(plans, childOrderPlan{
 			Product:           product,
+			SKU:               sku,
 			Item:              orderItem,
 			TotalAmount:       total,
 			PromotionDiscount: promotionDiscount,
@@ -680,6 +710,63 @@ func (s *OrderService) resolveSiteCurrency() string {
 	return normalizeSiteCurrency(currency)
 }
 
+func (s *OrderService) resolveOrderSKU(product *models.Product, rawSKUID uint) (*models.ProductSKU, error) {
+	if product == nil || product.ID == 0 {
+		return nil, ErrProductNotAvailable
+	}
+	if s.productSKURepo == nil {
+		return nil, ErrProductSKUInvalid
+	}
+
+	if rawSKUID > 0 {
+		sku, err := s.productSKURepo.GetByID(rawSKUID)
+		if err != nil {
+			return nil, err
+		}
+		if sku == nil || sku.ProductID != product.ID || !sku.IsActive {
+			return nil, ErrProductSKUInvalid
+		}
+		return sku, nil
+	}
+
+	// 兼容窗口：无 sku_id 时仅允许“商品存在且仅存在一个启用 SKU”自动回退。
+	activeSKUs, err := s.productSKURepo.ListByProduct(product.ID, true)
+	if err != nil {
+		return nil, err
+	}
+	if len(activeSKUs) == 1 {
+		return &activeSKUs[0], nil
+	}
+	if len(activeSKUs) == 0 {
+		return nil, ErrProductSKUInvalid
+	}
+	return nil, ErrProductSKURequired
+}
+
+func resolveManualFormSubmission(manualFormData map[string]models.JSON, productID, skuID uint) models.JSON {
+	if len(manualFormData) == 0 || productID == 0 {
+		return models.JSON{}
+	}
+
+	itemKey := buildOrderItemKey(productID, skuID)
+	if submission, ok := manualFormData[itemKey]; ok {
+		if submission == nil {
+			return models.JSON{}
+		}
+		return submission
+	}
+
+	legacyKey := strconv.FormatUint(uint64(productID), 10)
+	if submission, ok := manualFormData[legacyKey]; ok {
+		if submission == nil {
+			return models.JSON{}
+		}
+		return submission
+	}
+
+	return models.JSON{}
+}
+
 // cancelOrderWithChildren 取消父订单并级联子订单
 func (s *OrderService) cancelOrderWithChildren(order *models.Order, rollbackCoupon bool) error {
 	if order == nil {
@@ -689,6 +776,10 @@ func (s *OrderService) cancelOrderWithChildren(order *models.Order, rollbackCoup
 	err := models.DB.Transaction(func(tx *gorm.DB) error {
 		orderRepo := s.orderRepo.WithTx(tx)
 		productRepo := s.productRepo.WithTx(tx)
+		var productSKURepo repository.ProductSKURepository
+		if s.productSKURepo != nil {
+			productSKURepo = s.productSKURepo.WithTx(tx)
+		}
 		updates := map[string]interface{}{
 			"canceled_at": now,
 			"updated_at":  now,
@@ -717,12 +808,12 @@ func (s *OrderService) cancelOrderWithChildren(order *models.Order, rollbackCoup
 		}
 		if len(order.Children) > 0 {
 			for _, child := range order.Children {
-				if err := releaseManualStockByItems(productRepo, child.Items); err != nil {
+				if err := releaseManualStockByItems(productRepo, productSKURepo, child.Items); err != nil {
 					return err
 				}
 			}
 		} else {
-			if err := releaseManualStockByItems(productRepo, order.Items); err != nil {
+			if err := releaseManualStockByItems(productRepo, productSKURepo, order.Items); err != nil {
 				return err
 			}
 		}
@@ -851,6 +942,10 @@ func (s *OrderService) UpdateOrderStatus(orderID uint, targetStatus string) (*mo
 			err = models.DB.Transaction(func(tx *gorm.DB) error {
 				orderRepo := s.orderRepo.WithTx(tx)
 				productRepo := s.productRepo.WithTx(tx)
+				var productSKURepo repository.ProductSKURepository
+				if s.productSKURepo != nil {
+					productSKURepo = s.productSKURepo.WithTx(tx)
+				}
 				updates := map[string]interface{}{
 					"paid_at":    now,
 					"updated_at": now,
@@ -862,7 +957,7 @@ func (s *OrderService) UpdateOrderStatus(orderID uint, targetStatus string) (*mo
 					if err := orderRepo.UpdateStatus(child.ID, constants.OrderStatusPaid, updates); err != nil {
 						return ErrOrderUpdateFailed
 					}
-					if err := consumeManualStockByItems(productRepo, child.Items); err != nil {
+					if err := consumeManualStockByItems(productRepo, productSKURepo, child.Items); err != nil {
 						return err
 					}
 				}
@@ -968,6 +1063,10 @@ func (s *OrderService) UpdateOrderStatus(orderID uint, targetStatus string) (*mo
 		err = models.DB.Transaction(func(tx *gorm.DB) error {
 			orderRepo := s.orderRepo.WithTx(tx)
 			productRepo := s.productRepo.WithTx(tx)
+			var productSKURepo repository.ProductSKURepository
+			if s.productSKURepo != nil {
+				productSKURepo = s.productSKURepo.WithTx(tx)
+			}
 			if err := orderRepo.UpdateStatus(order.ID, target, updates); err != nil {
 				return ErrOrderUpdateFailed
 			}
@@ -977,7 +1076,7 @@ func (s *OrderService) UpdateOrderStatus(orderID uint, targetStatus string) (*mo
 					return err
 				}
 			}
-			if err := releaseManualStockByItems(productRepo, order.Items); err != nil {
+			if err := releaseManualStockByItems(productRepo, productSKURepo, order.Items); err != nil {
 				return err
 			}
 			if s.walletService != nil {
@@ -991,10 +1090,14 @@ func (s *OrderService) UpdateOrderStatus(orderID uint, targetStatus string) (*mo
 		err = models.DB.Transaction(func(tx *gorm.DB) error {
 			orderRepo := s.orderRepo.WithTx(tx)
 			productRepo := s.productRepo.WithTx(tx)
+			var productSKURepo repository.ProductSKURepository
+			if s.productSKURepo != nil {
+				productSKURepo = s.productSKURepo.WithTx(tx)
+			}
 			if err := orderRepo.UpdateStatus(order.ID, target, updates); err != nil {
 				return ErrOrderUpdateFailed
 			}
-			if err := consumeManualStockByItems(productRepo, order.Items); err != nil {
+			if err := consumeManualStockByItems(productRepo, productSKURepo, order.Items); err != nil {
 				return err
 			}
 			return nil
@@ -1328,18 +1431,20 @@ func mergeCreateOrderItems(items []CreateOrderItem) ([]CreateOrderItem, error) {
 		return nil, nil
 	}
 	merged := make([]CreateOrderItem, 0, len(items))
-	indexMap := make(map[uint]int)
+	indexMap := make(map[string]int)
 	for _, item := range items {
 		if item.ProductID == 0 || item.Quantity <= 0 {
 			return nil, ErrInvalidOrderItem
 		}
-		if idx, ok := indexMap[item.ProductID]; ok {
+		key := buildOrderItemKey(item.ProductID, item.SKUID)
+		if idx, ok := indexMap[key]; ok {
 			merged[idx].Quantity += item.Quantity
 			continue
 		}
-		indexMap[item.ProductID] = len(merged)
+		indexMap[key] = len(merged)
 		merged = append(merged, CreateOrderItem{
 			ProductID: item.ProductID,
+			SKUID:     item.SKUID,
 			Quantity:  item.Quantity,
 		})
 	}
