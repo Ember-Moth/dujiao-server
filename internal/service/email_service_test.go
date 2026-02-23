@@ -74,6 +74,20 @@ func TestBuildOrderStatusContent(t *testing.T) {
 				"Order No: DJ-DELIVER",
 			},
 		},
+		{
+			name:    "completed_with_payload_zh",
+			locale:  i18n.LocaleZH,
+			status:  "completed",
+			payload: "AUTO-CODE-001",
+			wantSubjectContains: []string{
+				"订单状态更新",
+				"已完成",
+			},
+			wantBodyContains: []string{
+				"交付内容",
+				"AUTO-CODE-001",
+			},
+		},
 	}
 
 	for _, tt := range tests {

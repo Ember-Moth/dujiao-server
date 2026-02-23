@@ -135,4 +135,12 @@ func TestCreateAutoFulfillmentRespectsSKUBoundary(t *testing.T) {
 	if otherAfter.Status != models.CardSecretStatusAvailable {
 		t.Fatalf("other secret status should stay available got %s", otherAfter.Status)
 	}
+
+	var orderAfter models.Order
+	if err := db.First(&orderAfter, order.ID).Error; err != nil {
+		t.Fatalf("query order failed: %v", err)
+	}
+	if orderAfter.Status != constants.OrderStatusCompleted {
+		t.Fatalf("order status want completed got %s", orderAfter.Status)
+	}
 }

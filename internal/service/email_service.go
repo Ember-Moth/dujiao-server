@@ -165,7 +165,7 @@ func buildOrderStatusContent(input OrderStatusEmailInput, locale string) (string
 	payload := strings.TrimSpace(input.FulfillmentInfo)
 	status := strings.ToLower(strings.TrimSpace(input.Status))
 	switch status {
-	case constants.OrderStatusDelivered:
+	case constants.OrderStatusDelivered, constants.OrderStatusCompleted:
 		if payload != "" {
 			body := i18n.Sprintf(normalized, "email.order_status.body_delivered", input.OrderNo, statusLabel, amount, currency, payload)
 			return subject, appendGuestTip(normalized, input, body)

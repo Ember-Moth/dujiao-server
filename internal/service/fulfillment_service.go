@@ -273,7 +273,7 @@ func (s *FulfillmentService) CreateAuto(orderID uint) (*models.Fulfillment, erro
 			return ErrFulfillmentCreateFailed
 		}
 		if err := tx.Model(&models.Order{}).Where("id = ?", orderID).Updates(map[string]interface{}{
-			"status":     constants.OrderStatusDelivered,
+			"status":     constants.OrderStatusCompleted,
 			"updated_at": now,
 		}).Error; err != nil {
 			return ErrOrderUpdateFailed
@@ -301,12 +301,12 @@ func (s *FulfillmentService) CreateAuto(orderID uint) (*models.Fulfillment, erro
 				logger.Warnw("fulfillment_sync_parent_status_failed",
 					"order_id", order.ID,
 					"parent_order_id", *order.ParentID,
-					"target_status", constants.OrderStatusDelivered,
+					"target_status", constants.OrderStatusCompleted,
 					"error", syncErr,
 				)
 			} else {
 				if status == "" {
-					status = constants.OrderStatusDelivered
+					status = constants.OrderStatusCompleted
 				}
 				if _, err := enqueueOrderStatusEmailTaskIfEligible(s.orderRepo, s.queueClient, *order.ParentID, status); err != nil {
 					logger.Warnw("fulfillment_enqueue_status_email_failed",
@@ -318,11 +318,11 @@ func (s *FulfillmentService) CreateAuto(orderID uint) (*models.Fulfillment, erro
 				}
 			}
 		} else {
-			if _, err := enqueueOrderStatusEmailTaskIfEligible(s.orderRepo, s.queueClient, orderID, constants.OrderStatusDelivered); err != nil {
+			if _, err := enqueueOrderStatusEmailTaskIfEligible(s.orderRepo, s.queueClient, orderID, constants.OrderStatusCompleted); err != nil {
 				logger.Warnw("fulfillment_enqueue_status_email_failed",
 					"order_id", order.ID,
 					"target_order_id", orderID,
-					"status", constants.OrderStatusDelivered,
+					"status", constants.OrderStatusCompleted,
 					"error", err,
 				)
 			}
