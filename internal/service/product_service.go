@@ -578,11 +578,7 @@ func (s *ProductService) Delete(id string) error {
 }
 
 // ApplyAutoStockCounts 聚合卡密自动发货库存信息并填充到商品中
-func (s *ProductService) ApplyAutoStockCounts(products ...models.Product) error {
-	if len(products) == 0 {
-		return nil
-	}
-
+func (s *ProductService) ApplyAutoStockCounts(products []models.Product) error {
 	var productIDs []uint
 	for _, p := range products {
 		if p.FulfillmentType == constants.FulfillmentTypeAuto {

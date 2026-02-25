@@ -129,7 +129,7 @@ func (h *Handler) GetProducts(c *gin.Context) {
 		promotionService = service.NewPromotionService(h.PromotionRepo)
 	}
 
-	if err := h.ProductService.ApplyAutoStockCounts(products...); err != nil {
+	if err := h.ProductService.ApplyAutoStockCounts(products); err != nil {
 		respondError(c, response.CodeInternal, "error.product_fetch_failed", err)
 		return
 	}
@@ -174,7 +174,7 @@ func (h *Handler) GetProductBySlug(c *gin.Context) {
 	}
 
 	temp := []models.Product{*product}
-	if err := h.ProductService.ApplyAutoStockCounts(temp...); err != nil {
+	if err := h.ProductService.ApplyAutoStockCounts(temp); err != nil {
 		respondError(c, response.CodeInternal, "error.product_fetch_failed", err)
 		return
 	}

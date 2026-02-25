@@ -32,7 +32,7 @@ func (h *Handler) GetAdminProducts(c *gin.Context) {
 		return
 	}
 
-	if err := h.ProductService.ApplyAutoStockCounts(products...); err != nil {
+	if err := h.ProductService.ApplyAutoStockCounts(products); err != nil {
 		respondError(c, response.CodeInternal, "error.product_fetch_failed", err)
 		return
 	}
@@ -65,7 +65,7 @@ func (h *Handler) GetAdminProduct(c *gin.Context) {
 	}
 
 	temp := []models.Product{*product}
-	if err := h.ProductService.ApplyAutoStockCounts(temp...); err != nil {
+	if err := h.ProductService.ApplyAutoStockCounts(temp); err != nil {
 		respondError(c, response.CodeInternal, "error.product_fetch_failed", err)
 		return
 	}
