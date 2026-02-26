@@ -478,6 +478,11 @@ func (h *Handler) HandleAlipayCallback(c *gin.Context) bool {
 		c.String(200, constants.AlipayCallbackFail)
 		return true
 	}
+	if err := alipay.VerifyCallbackOwnership(cfg, form); err != nil {
+		requestLog(c).Warnw("alipay_callback_ownership_invalid", "error", err)
+		c.String(200, constants.AlipayCallbackFail)
+		return true
+	}
 
 	input, err := parseAlipayCallback(form, payment.ID)
 	if err != nil {

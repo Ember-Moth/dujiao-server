@@ -267,6 +267,27 @@ func VerifyCallback(cfg *Config, form map[string][]string) error {
 	return nil
 }
 
+// VerifyCallbackOwnership 校验支付宝回调归属，防止跨商户回调注入。
+func VerifyCallbackOwnership(cfg *Config, form map[string][]string) error {
+	if cfg == nil {
+		return fmt.Errorf("%w: config is nil", ErrConfigInvalid)
+	}
+	if len(form) == 0 {
+		return fmt.Errorf("%w: callback form is empty", ErrSignatureInvalid)
+	}
+	callbackAppID := strings.TrimSpace(firstFormValue(form, "app_id"))
+	if callbackAppID == "" {
+		callbackAppID = strings.TrimSpace(firstFormValue(form, "appid"))
+	}
+	if callbackAppID == "" {
+		return fmt.Errorf("%w: app_id is required", ErrSignatureInvalid)
+	}
+	if !strings.EqualFold(callbackAppID, strings.TrimSpace(cfg.AppID)) {
+		return fmt.Errorf("%w: app_id mismatch", ErrSignatureInvalid)
+	}
+	return nil
+}
+
 func requestPrecreate(ctx context.Context, cfg *Config, method string, params map[string]string, fallbackOrderNo string) (*CreateResult, error) {
 	responseBody, err := postGateway(ctx, cfg.GatewayURL, params)
 	if err != nil {

@@ -209,6 +209,36 @@ func TestVerifyCallbackInvalidSign(t *testing.T) {
 	}
 }
 
+func TestVerifyCallbackOwnershipSuccess(t *testing.T) {
+	cfg := buildTestConfig("https://openapi.alipay.com/gateway.do")
+	form := map[string][]string{
+		"app_id": []string{cfg.AppID},
+	}
+	if err := VerifyCallbackOwnership(cfg, form); err != nil {
+		t.Fatalf("expected ownership verify success, got: %v", err)
+	}
+}
+
+func TestVerifyCallbackOwnershipMissingAppID(t *testing.T) {
+	cfg := buildTestConfig("https://openapi.alipay.com/gateway.do")
+	form := map[string][]string{
+		"notify_id": {"notify-3"},
+	}
+	if err := VerifyCallbackOwnership(cfg, form); err == nil {
+		t.Fatalf("expected ownership verify error for missing app_id")
+	}
+}
+
+func TestVerifyCallbackOwnershipAppIDMismatch(t *testing.T) {
+	cfg := buildTestConfig("https://openapi.alipay.com/gateway.do")
+	form := map[string][]string{
+		"app_id": {"2026999999999999"},
+	}
+	if err := VerifyCallbackOwnership(cfg, form); err == nil {
+		t.Fatalf("expected ownership verify error for app_id mismatch")
+	}
+}
+
 func buildTestConfig(gatewayURL string) *Config {
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
