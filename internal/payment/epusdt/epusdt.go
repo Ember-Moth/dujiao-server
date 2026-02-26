@@ -239,6 +239,10 @@ func VerifyCallback(cfg *Config, data *CallbackData) error {
 		return ErrConfigInvalid
 	}
 
+	if data.Status != StatusSuccess {
+		return fmt.Errorf("%w: status is not success", ErrResponseInvalid)
+	}
+
 	params := map[string]interface{}{
 		"trade_id":             data.TradeID,
 		"order_id":             data.OrderID,
